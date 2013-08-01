@@ -1,5 +1,5 @@
-#ifndef _BLOCK_H_
-#define _BLOCK_H_
+#ifndef _MILLSTONE_H_
+#define _MILLSTONE_H_
 
 #define _LARGEFILE64_SOURCE
 #include <stdlib.h>
@@ -26,4 +26,4 @@ TYPEDEF_STRUCT (block_digest_t,
 	}					\
     })
 
-#endif /* _BLOCK_H_ */
+#endif /* _MILLSTONE_H_ */

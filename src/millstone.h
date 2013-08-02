@@ -3,6 +3,9 @@
 
 #define _LARGEFILE64_SOURCE
 #include <stdlib.h>
+#include <stddef.h>
+#include <stdbool.h>
+#include <inttypes.h>
 
 #include <metaresc.h>
 #include <openssl/sha.h>

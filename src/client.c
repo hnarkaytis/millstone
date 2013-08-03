@@ -197,33 +197,48 @@ cmd_writer (void * arg)
   return (NULL);
 }
 
+static status_t
+calc_digest (block_digest_t * block_digest, int fd)
+{
+  status_t status = ST_FAILURE;
+  unsigned char * data = mmap64 (NULL, block_digest->block_id.size, PROT_READ, MAP_PRIVATE,
+				 fd, block_digest->block_id.offset);
+  if (-1 == (long)data)
+    FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+  else
+    {
+      SHA1 (data, block_digest->block_id.size, (unsigned char*)block_digest->digest);
+      
+      if (0 != munmap (data, block_digest->block_id.size))
+	ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
+      else
+	status = ST_SUCCESS;
+    }
+  return (status);
+}
+
 static void *
 digest_calculator (void * arg)
 {
   client_t * client = arg;
-  unsigned char digest[SHA_DIGEST_LENGTH];
+  block_digest_t block_digest;
+  status_t status;
   msg_t msg;
-  
+
+  memset (&block_digest, 0, sizeof (block_digest));
   for (;;)
     {
       queue_pop (&client->cmd_in.queue, &msg);
-      
-      unsigned char * data = mmap64 (NULL, msg.msg_data.block_id.size, PROT_READ, MAP_PRIVATE,
-				     client->connection->context->file_fd,
-				     msg.msg_data.block_id.offset);
-      if (-1 == (long)data)
-	{
-	  FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
-	  msg.msg_type = MT_BLOCK_SEND_ERROR;
-	}
+
+      block_digest.block_id = msg.msg_data.block_digest.block_id;
+      status = calc_digest (&block_digest, client->connection->context->file_fd);
+
+      if (ST_SUCCESS != status)
+	msg.msg_type = MT_BLOCK_SEND_ERROR;
       else
 	{
-	  SHA1 (data, msg.msg_data.block_id.size, digest);
 	  msg.msg_type = MT_BLOCK_MATCHED;
-	  msg.msg_data.block_matched.matched = !memcmp (digest, msg.msg_data.block_digest.digest, sizeof (digest));
-      
-	  if (0 != munmap (data, msg.msg_data.block_id.size))
-	    ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
+	  msg.msg_data.block_matched.matched = !memcmp (block_digest.digest, msg.msg_data.block_digest.digest, sizeof (block_digest.digest));
 	}
       queue_push (&client->cmd_out.queue, &msg);
     }

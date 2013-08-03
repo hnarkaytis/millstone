@@ -1,7 +1,10 @@
 #ifndef _MILLSTONE_H_
 #define _MILLSTONE_H_
 
+#ifndef _LARGEFILE64_SOURCE
 #define _LARGEFILE64_SOURCE
+#endif /* _LARGEFILE64_SOURCE */
+
 #include <stdlib.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -20,6 +23,16 @@ TYPEDEF_STRUCT (config_t,
 		string_t dst_file,
 		string_t dst_host,
 		int dst_port,
+		)
+
+TYPEDEF_STRUCT (context_t,
+		(config_t *, config),
+		int file_fd,
+		)
+
+TYPEDEF_STRUCT (connection_t,
+		(context_t *, context),
+		int conn_fd,
 		)
 
 TYPEDEF_STRUCT (block_id_t,

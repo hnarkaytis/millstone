@@ -4,22 +4,21 @@
 #include <pthread.h>
 #include <semaphore.h>
 
-#define QUEUE_SIZE (4)
+#include <millstone.h>
 
-typedef struct {
-  char * queue;
-  size_t count;
-  size_t elem_size;
-  int head;
-  int tail;
-  pthread_mutex_t head_mutex;
-  pthread_mutex_t tail_mutex;
-  sem_t full;
-  sem_t empty;
-} queue_t;
+TYPEDEF_STRUCT (queue_t,
+		(mr_rarray_t *, array),
+		(size_t, elem_size),
+		int count,
+		int used,
+		int head,
+		int tail,
+		(pthread_mutex_t, mutex),
+		(pthread_cond_t, full),
+		(pthread_cond_t, empty),
+		)
 
-extern status_t queue_init (queue_t * queue, size_t count, size_t elem_size);
-extern void queue_free (queue_t * queue);
+extern status_t queue_init (queue_t * queue, mr_rarray_t * array, size_t elem_size);
 extern void queue_push (queue_t * queue, void * element);
 extern void queue_pop (queue_t * queue, void * element);
 

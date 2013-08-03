@@ -11,11 +11,19 @@
 #include <queue.h>
 #include <logging.h>
 
+#define MSG_OUT_QUEUE_SIZE (2)
+#define MSG_IN_QUEUE_SIZE (16)
+
+TYPEDEF_STRUCT (msg_queue_t,
+		(queue_t, queue),
+		RARRAY (msg_t, array),
+		)
+
 TYPEDEF_STRUCT (client_t,
 		(connection_t *, connection),
-		(queue_t, data_in),
-		(queue_t, cmd_in),
-		(queue_t, cmd_out),
+		(msg_queue_t, data_in),
+		(msg_queue_t, cmd_in),
+		(msg_queue_t, cmd_out),
 		)
 
 #ifndef SD_BOTH
@@ -113,8 +121,7 @@ cmd_writer (void * arg)
   for (;;)
     {
       msg_t msg;
-      //queue_pop (&client->cmd_out, &msg);
-      memset (&msg, 0, sizeof (msg));
+      queue_pop (&client->cmd_out.queue, &msg);
       status_t status = msg_send (client->connection->cmd_fd, &msg);
       if (ST_SUCCESS != status)
 	break;
@@ -125,16 +132,38 @@ cmd_writer (void * arg)
 }
 
 static status_t
+msg_queue_init (msg_queue_t * msg_queue, msg_t * array, size_t size)
+{
+  msg_queue->array.data = array;
+  msg_queue->array.size = size;
+  msg_queue->array.alloc_size = -1;
+  status_t status = queue_init (&msg_queue->queue, (mr_rarray_t*)&msg_queue->array, sizeof (msg_queue->array.data[0]));
+  return (status);
+}
+
+#define MSG_QUEUE_INIT(MSG_QUEUE, ARRAY) msg_queue_init (MSG_QUEUE, ARRAY, sizeof (ARRAY))
+
+static status_t
 start_session (connection_t * connection)
 {
   int rv;
   pthread_t cmd_writer_id, data_writer_id;
   client_t client = { .connection = connection };
   status_t status = send_file_meta (connection);
+  msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
+  msg_t cmd_in_array_data[MSG_IN_QUEUE_SIZE];
+  msg_t data_in_array_data[MSG_OUT_QUEUE_SIZE];
   
+  status = MSG_QUEUE_INIT (&client.cmd_out, cmd_out_array_data);
   if (ST_SUCCESS != status)
-    return (ST_FAILURE);
-
+    return (status);
+  status = MSG_QUEUE_INIT (&client.cmd_in, cmd_in_array_data);
+  if (ST_SUCCESS != status)
+    return (status);
+  status = MSG_QUEUE_INIT (&client.data_in, data_in_array_data);
+  if (ST_SUCCESS != status)
+    return (status);
+  
   rv = pthread_create (&cmd_writer_id, NULL, cmd_writer, &client);
   if (rv != 0)
     {

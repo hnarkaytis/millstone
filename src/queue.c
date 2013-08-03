@@ -1,72 +1,77 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
+#define _LARGEFILE64_SOURCE
+#define _GNU_SOURCE
+#include <stddef.h>
 #include <string.h>
-#include <pthread.h>
-#include <semaphore.h>
 
-#include "logging.h"
-#include "queue.h"
+#include <pthread.h>
+
+#include <millstone.h>
+#include <logging.h>
+#include <queue.h>
 
 status_t
-queue_init (queue_t * queue, size_t count, size_t elem_size)
+queue_init (queue_t * queue, mr_rarray_t * array, size_t elem_size)
 {
+  if (elem_size <= 0)
+    {
+      ERROR_MSG ("Illegal element size %zd", elem_size);
+      return (ST_FAILURE);
+    }
+  if (NULL == array)
+    {
+      ERROR_MSG ("Array for queue is NULL");
+      return (ST_FAILURE);
+    }
+  if ((NULL == array->data) || (array->size <= 0))
+    {
+      ERROR_MSG ("Illegal rarray for queue");
+      return (ST_FAILURE);
+    }
+  queue->array = array;
   queue->head = 0;
   queue->tail = 0;
-  queue->count = count;
   queue->elem_size = elem_size;
-  pthread_mutex_init (&queue->head_mutex, NULL);
-  pthread_mutex_init (&queue->tail_mutex, NULL);
-  sem_init (&queue->full, 0, 0);
-  sem_init (&queue->empty, 0, count);
-  queue->queue = malloc (count * elem_size);
-
-  if (NULL == queue->queue)
-    {
-      ERROR_MSG ("Memory allocation failed.");
-      return (ST_FAIL);
-    }
-  else
-    return (ST_OK);
-}
-
-void
-queue_free (queue_t * queue)
-{
-  if (queue->queue)
-    free (queue->queue);
-  queue->queue = NULL;
-  queue->count = 0;
-  queue->elem_size = 0;
+  queue->count = array->size / elem_size;
+  queue->used = 0;
+  pthread_mutex_init (&queue->mutex, NULL);
+  pthread_cond_init (&queue->full, NULL);
+  pthread_cond_init (&queue->empty, NULL);
+  return (ST_SUCCESS);
 }
 
 void
 queue_push (queue_t * queue, void * element)
 {
-  sem_wait (&queue->empty);
-  pthread_mutex_lock (&queue->head_mutex);
-  memcpy (&queue->queue[queue->head * queue->elem_size],
-          element, queue->elem_size);
+  char * array = queue->array->data;
 
-  ++queue->head;
-  if (queue->head == queue->count)
+  pthread_mutex_lock (&queue->mutex);
+  while (queue->used == queue->count)
+    pthread_cond_wait (&queue->full, &queue->mutex);
+  
+  memcpy (&array[queue->head * queue->elem_size], element, queue->elem_size);
+
+  if (++queue->head == queue->count)
     queue->head = 0;
-  pthread_mutex_unlock (&queue->head_mutex);
-  sem_post (&queue->full);
+  if (queue->used++ == 0)
+    pthread_cond_broadcast (&queue->empty);
+  pthread_mutex_unlock (&queue->mutex);
 }
 
 void
 queue_pop (queue_t * queue, void * element)
 {
-  sem_wait (&queue->full);
-  pthread_mutex_lock (&queue->tail_mutex);
-  memcpy (element, &queue->queue[queue->tail * queue->elem_size],
-          queue->elem_size);
-  ++queue->tail;
-  if (queue->tail == queue->count)
+  char * array = queue->array->data;
+
+  pthread_mutex_lock (&queue->mutex);
+  while (queue->used == 0)
+    pthread_cond_wait (&queue->empty, &queue->mutex);
+  
+  memcpy (element, &array[queue->tail * queue->elem_size], queue->elem_size);
+  
+  if (++queue->tail == queue->count)
     queue->tail = 0;
-  pthread_mutex_unlock (&queue->tail_mutex);
-  sem_post (&queue->empty);
+  if (queue->used-- == queue->count)
+    pthread_cond_broadcast (&queue->full);
+  pthread_mutex_unlock (&queue->mutex);
 }
 
-// vim: ts=2 sw=2 et cc=81 listchars=eol\:$,tab\:>-,trail\:X cinoptions=>4,n-2,{2,^-2,\:2,=2,g0,h2,p5,t0,+2,(0,u0,w1,m1

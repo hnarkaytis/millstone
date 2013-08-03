@@ -1,9 +1,9 @@
 #define _LARGEFILE64_SOURCE
 #include <stdlib.h>
-#include <stdbool.h>
 #include <getopt.h>
 
 #include <millstone.h>
+#include <client.h>
 #include <logging.h>
 
 static status_t
@@ -90,6 +90,7 @@ int main (int argc, char * argv[])
     case RM_SERVER:
       break;
     case RM_CLIENT:
+      status = client (&config);
       break;
     default:
       status = ST_FAILURE;

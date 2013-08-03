@@ -81,6 +81,19 @@ msg_send (int fd, msg_t * msg)
   return (status);
 }
 
+static void
+close_connection (int fd)
+{
+  shutdown (fd, SD_BOTH);
+  close (fd);
+}
+
+static void
+close_connection_void (void * arg)
+{
+  close_connection ((long)arg);
+}
+
 static status_t
 reader (client_t * client)
 {
@@ -108,6 +121,7 @@ reader (client_t * client)
       if (ST_SUCCESS != status)
 	break;
     }
+  close_connection (client->connection->cmd_fd);
   return (status);
 }
 
@@ -179,8 +193,7 @@ cmd_writer (void * arg)
       if (ST_SUCCESS != status)
 	break;
     }
-  shutdown (client->connection->cmd_fd, SD_BOTH);
-  close (client->connection->cmd_fd);
+  close_connection (client->connection->cmd_fd);
   return (NULL);
 }
 
@@ -317,14 +330,6 @@ start_session (connection_t * connection)
   return (status);
 }
 
-static void
-close_connection (void * arg)
-{
-  int fd = (long)arg;
-  shutdown (fd, SD_BOTH);
-  close (fd);
-}
-
 static status_t
 open_data_connection (connection_t * connection, struct sockaddr_in * name)
 {
@@ -336,7 +341,7 @@ open_data_connection (connection_t * connection, struct sockaddr_in * name)
       return (ST_FAILURE);
     }
 
-  pthread_cleanup_push (close_connection, (void*)(long)connection->data_fd);
+  pthread_cleanup_push (close_connection_void, (void*)(long)connection->data_fd);
 
   int rv = TEMP_FAILURE_RETRY (connect (connection->data_fd, (struct sockaddr *)name, sizeof (*name)));
   if (-1 != rv)
@@ -368,7 +373,7 @@ connect_to_server (context_t * context)
       return (ST_FAILURE);
     }
 
-  pthread_cleanup_push (close_connection, (void*)(long)connection.cmd_fd);
+  pthread_cleanup_push (close_connection_void, (void*)(long)connection.cmd_fd);
 
   struct hostent * hostinfo = gethostbyname (context->config->dst_host);
   if (hostinfo != NULL)
@@ -414,4 +419,3 @@ start_client (config_t * config)
 
   return (status);
 }
-

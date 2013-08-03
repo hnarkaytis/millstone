@@ -60,7 +60,7 @@ parse_args (int argc, char * argv[], config_t * config)
       if (semicollon)
 	{
 	  char * end;
-	  config->port = strtol (semicollon + 1, &end, 10);
+	  config->dst_port = strtol (semicollon + 1, &end, 10);
 	  if (0 != *end)
 	    {
 	      ERROR_MSG ("Can't parse port number from '%s'", dst);

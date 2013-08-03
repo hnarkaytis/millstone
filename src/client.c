@@ -10,10 +10,33 @@
 #include <client.h>
 #include <logging.h>
 
-status_t
+static status_t
+send_file_meta (connection_t * connection)
+{
+  const struct iovec iov[] = {
+    { .iov_len = sizeof (connection->context->size), .iov_base = &connection->context->size },
+    { .iov_len = strlen (connection->context->config->dst_file) + 1, .iov_base = connection->context->config->dst_file },
+  };
+
+  int rv = TEMP_FAILURE_RETRY (writev (connection->conn_fd, iov,
+                                       sizeof (iov) / sizeof (iov[0])));
+  size_t len = 0;
+  int i;
+  for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
+    len = iov[i].iov_len;
+  
+  return ((rv == len) ? ST_SUCCESS : ST_FAILURE);
+}
+
+static status_t
 session (connection_t * connection)
 {
-  return (EXIT_SUCCESS);
+  status_t status = send_file_meta (connection);
+
+  if (ST_SUCCESS != status)
+    return (ST_FAILURE);
+  
+  return (ST_SUCCESS);
 }
 
 status_t
@@ -71,6 +94,8 @@ client (config_t * config)
       return (ST_FAILURE);
     }
 
+  context.size = lseek64 (context.file_fd, 0, SEEK_END);
+  
   pthread_cleanup_push ((void (*) (void*))close, (void*)(long)context.file_fd);
   status = connect_to_server (&context);
   pthread_cleanup_pop (!0);

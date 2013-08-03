@@ -28,6 +28,7 @@ TYPEDEF_STRUCT (config_t,
 TYPEDEF_STRUCT (context_t,
 		(config_t *, config),
 		int file_fd,
+		(size_t, size),
 		)
 
 TYPEDEF_STRUCT (connection_t,

@@ -139,6 +139,13 @@ send_block (client_t * client, block_id_t * block_id)
       status = ST_FAILURE;
     }
 
+      
+  if (0 != munmap (data, block_id->size))
+    {
+      ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
+      status = EXIT_FAILURE;
+    }
+  
   return (status);
 }
 
@@ -177,6 +184,103 @@ cmd_writer (void * arg)
   return (NULL);
 }
 
+static void *
+digest_calculator (void * arg)
+{
+  client_t * client = arg;
+  unsigned char digest[SHA_DIGEST_LENGTH];
+  msg_t msg;
+  
+  for (;;)
+    {
+      queue_pop (&client->cmd_in.queue, &msg);
+      
+      unsigned char * data = mmap64 (NULL, msg.msg_data.block_id.size, PROT_READ, MAP_PRIVATE,
+				     client->connection->context->file_fd,
+				     msg.msg_data.block_id.offset);
+      if (-1 == (long)data)
+	{
+	  FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+	  msg.msg_type = MT_BLOCK_SEND_ERROR;
+	}
+      else
+	{
+	  SHA1 (data, msg.msg_data.block_id.size, digest);
+	  msg.msg_type = MT_BLOCK_MATCHED;
+	  msg.msg_data.block_matched.matched = !memcmp (digest, msg.msg_data.block_digest.digest, sizeof (digest));
+      
+	  if (0 != munmap (data, msg.msg_data.block_id.size))
+	    ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
+	}
+      queue_push (&client->cmd_out.queue, &msg);
+    }
+  return (NULL);
+}
+
+static status_t
+start_data_writer (client_t * client)
+{
+  pthread_t data_writer_id;
+  int rv = pthread_create (&data_writer_id, NULL, data_writer, &client);
+  if (rv != 0)
+    {
+      ERROR_MSG ("Failed to start command writer thread");
+      return (ST_FAILURE);
+    }
+  
+  status_t status = reader (client);
+  
+  pthread_cancel (data_writer_id);
+  pthread_join (data_writer_id, NULL);
+
+  return (status);
+}
+
+static status_t
+start_cmd_writer (client_t * client)
+{
+  pthread_t cmd_writer_id;
+  int rv = pthread_create (&cmd_writer_id, NULL, cmd_writer, &client);
+  if (rv != 0)
+    {
+      ERROR_MSG ("Failed to start command writer thread");
+      return (ST_FAILURE);
+    }
+
+  status_t status = start_data_writer (client);
+  
+  pthread_cancel (cmd_writer_id);
+  pthread_join (cmd_writer_id, NULL);
+  
+  return (status);
+}
+
+static status_t
+start_digest_calculators (client_t * client)
+{
+  int i, ncpu = (long) sysconf (_SC_NPROCESSORS_ONLN);
+  pthread_t ids[ncpu];
+  status_t status = ST_SUCCESS;
+
+  for (i = 0; i < ncpu; ++i)
+    {
+      status = pthread_create (&ids[i], NULL, digest_calculator, client);
+      if (ST_SUCCESS != status)
+	break;
+    }
+
+  if (ST_SUCCESS == status)
+    status = start_cmd_writer (client);
+
+  for ( ; i>= 0; --i)
+    {
+      pthread_cancel (ids[i]);
+      pthread_join (ids[i], NULL);
+    }
+  
+  return (status);
+}
+
 static status_t
 msg_queue_init (msg_queue_t * msg_queue, msg_t * array, size_t size)
 {
@@ -192,8 +296,6 @@ msg_queue_init (msg_queue_t * msg_queue, msg_t * array, size_t size)
 static status_t
 start_session (connection_t * connection)
 {
-  int rv;
-  pthread_t cmd_writer_id, data_writer_id;
   client_t client = { .connection = connection };
   status_t status = send_file_meta (connection);
   msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
@@ -209,28 +311,9 @@ start_session (connection_t * connection)
   status = MSG_QUEUE_INIT (&client.data_in, data_in_array_data);
   if (ST_SUCCESS != status)
     return (status);
-  
-  rv = pthread_create (&cmd_writer_id, NULL, cmd_writer, &client);
-  if (rv != 0)
-    {
-      ERROR_MSG ("Failed to start command writer thread");
-      return (ST_FAILURE);
-    }
-  
-  rv = pthread_create (&data_writer_id, NULL, data_writer, &client);
-  if (rv != 0)
-    {
-      ERROR_MSG ("Failed to start command writer thread");
-      return (ST_FAILURE);
-    }
-  
-  status = reader (&client);
-  
-  pthread_cancel (cmd_writer_id);
-  pthread_join (cmd_writer_id, NULL);
-  pthread_cancel (data_writer_id);
-  pthread_join (data_writer_id, NULL);
-  
+
+  status = start_digest_calculators (&client);
+
   return (status);
 }
 

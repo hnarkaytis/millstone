@@ -20,12 +20,17 @@ send_file_meta (connection_t * connection)
 
   int rv = TEMP_FAILURE_RETRY (writev (connection->conn_fd, iov,
                                        sizeof (iov) / sizeof (iov[0])));
-  size_t len = 0;
-  int i;
+  int i, len = 0;
   for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
     len = iov[i].iov_len;
-  
-  return ((rv == len) ? ST_SUCCESS : ST_FAILURE);
+
+  status_t status = ST_SUCCESS;
+  if (rv != len)
+    {
+      ERROR_MSG ("Failed to send hand shake message (sent %d bytes, but expexted to send %d bytes)", rv, len);
+      status = ST_FAILURE;
+    }
+  return (status);
 }
 
 static status_t

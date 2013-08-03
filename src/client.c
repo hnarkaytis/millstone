@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <errno.h>
+#include <sys/mman.h>
 
 #include <pthread.h>
 
@@ -95,6 +96,10 @@ reader (client_t * client)
       switch (msg.msg_type)
 	{
 	case MT_BLOCK_DIGEST:
+	  queue_push (&client->cmd_in.queue, &msg);
+	  break;
+	case MT_BLOCK_REQUEST:
+	  queue_push (&client->data_in.queue, &msg);
 	  break;
 	default:
 	  status = ST_FAILURE;
@@ -106,11 +111,54 @@ reader (client_t * client)
   return (status);
 }
 
+static status_t
+send_block (client_t * client, block_id_t * block_id)
+{
+  unsigned char * data = mmap64 (NULL, block_id->size, PROT_READ, MAP_PRIVATE,
+				 client->connection->context->file_fd, block_id->offset);
+  if (-1 == (long)data)
+    {
+      FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+      return (ST_FAILURE);
+    }
+  
+  const struct iovec iov[] = {
+    { .iov_len = sizeof (*block_id), .iov_base = block_id },
+    { .iov_len = block_id->size, .iov_base = data },
+  };
+
+  int rv = TEMP_FAILURE_RETRY (writev (client->connection->data_fd, iov, sizeof (iov) / sizeof (iov[0])));
+  int i, len = 0;
+  for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
+    len = iov[i].iov_len;
+
+  status_t status = ST_SUCCESS;
+  if (rv != len)
+    {
+      ERROR_MSG ("Failed to send data block (sent %d bytes, but expexted %d bytes)", rv, len);
+      status = ST_FAILURE;
+    }
+
+  return (status);
+}
+
 static void *
 data_writer (void * arg)
 {
   client_t * client = arg;
-  client->connection->cmd_fd = 0;
+  for (;;)
+    {
+      msg_t msg;
+      queue_pop (&client->data_in.queue, &msg);
+      status_t status = send_block (client, &msg.msg_data.block_id);
+      if (ST_SUCCESS != status)
+	msg.msg_type = MT_BLOCK_SEND_ERROR;
+      else
+	msg.msg_type = MT_BLOCK_SENT;
+      queue_push (&client->cmd_out.queue, &msg);
+    }
+  shutdown (client->connection->cmd_fd, SD_BOTH);
+  close (client->connection->cmd_fd);
   return (NULL);
 }
 
@@ -152,7 +200,7 @@ start_session (connection_t * connection)
   status_t status = send_file_meta (connection);
   msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
   msg_t cmd_in_array_data[MSG_IN_QUEUE_SIZE];
-  msg_t data_in_array_data[MSG_OUT_QUEUE_SIZE];
+  msg_t data_in_array_data[MSG_IN_QUEUE_SIZE];
   
   status = MSG_QUEUE_INIT (&client.cmd_out, cmd_out_array_data);
   if (ST_SUCCESS != status)

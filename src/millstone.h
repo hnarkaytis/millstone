@@ -10,6 +10,16 @@
 #include <metaresc.h>
 #include <openssl/sha.h>
 
+TYPEDEF_ENUM (status_t, ST_SUCCESS, ST_FAILURE)
+
+TYPEDEF_ENUM (run_mode_t, RM_SERVER, RM_CLIENT)
+
+TYPEDEF_STRUCT (config_t,
+		(run_mode_t, run_mode),
+		(char *, src),
+		(char *, dst),
+		)
+
 TYPEDEF_STRUCT (block_id_t,
 		(size_t, size),
 		(off64_t, offset),

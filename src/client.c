@@ -18,7 +18,7 @@ send_file_meta (connection_t * connection)
     { .iov_len = strlen (connection->context->config->dst_file) + 1, .iov_base = connection->context->config->dst_file },
   };
 
-  int rv = TEMP_FAILURE_RETRY (writev (connection->conn_fd, iov,
+  int rv = TEMP_FAILURE_RETRY (writev (connection->cmd_fd, iov,
                                        sizeof (iov) / sizeof (iov[0])));
   int i, len = 0;
   for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
@@ -44,22 +44,50 @@ session (connection_t * connection)
   return (ST_SUCCESS);
 }
 
-status_t
+static status_t
+open_data_connection (connection_t * connection, struct sockaddr_in * name)
+{
+  status_t status;
+  connection->data_fd = socket (PF_INET, SOCK_DGRAM, 0);
+  if (connection->data_fd <= 0)
+    {
+      ERROR_MSG ("Data socket failed errno(%d) '%s'.", errno, strerror (errno));
+      return (ST_FAILURE);
+    }
+
+  pthread_cleanup_push ((void (*) (void*))close, (void*)(long)connection->data_fd);
+
+  int rv = TEMP_FAILURE_RETRY (connect (connection->data_fd, (struct sockaddr *)name, sizeof (*name)));
+  if (-1 != rv)
+    status = session (connection);
+  else
+    {
+      ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
+      return (ST_FAILURE);
+    }
+  
+  pthread_cleanup_pop (!0);
+
+  return (status);
+}
+
+static status_t
 connect_to_server (context_t * context)
 {
+  status_t status;
   struct sockaddr_in name;
   connection_t connection = {
     .context = context,
   };
 
-  connection.conn_fd = socket (PF_INET, SOCK_STREAM, 0);
-  if (connection.conn_fd <= 0)
+  connection.cmd_fd = socket (PF_INET, SOCK_STREAM, 0);
+  if (connection.cmd_fd <= 0)
     {
-      ERROR_MSG ("Socket failed errno(%d) '%s'.", errno, strerror (errno));
+      ERROR_MSG ("Command socket failed errno(%d) '%s'.", errno, strerror (errno));
       return (ST_FAILURE);
     }
 
-  pthread_cleanup_push ((void (*) (void*))close, (void*)(long)connection.conn_fd);
+  pthread_cleanup_push ((void (*) (void*))close, (void*)(long)connection.cmd_fd);
 
   struct hostent * hostinfo = gethostbyname (context->config->dst_host);
   if (hostinfo != NULL)
@@ -70,20 +98,18 @@ connect_to_server (context_t * context)
   name.sin_family = AF_INET;
   name.sin_port = htons (context->config->dst_port);
 
-  int rv = TEMP_FAILURE_RETRY (connect (connection.conn_fd, (struct sockaddr *)&name,
-					sizeof (struct sockaddr_in)));
-  if (-1 == rv)
+  int rv = TEMP_FAILURE_RETRY (connect (connection.cmd_fd, (struct sockaddr *)&name, sizeof (name)));
+  if (-1 != rv)
+    status = open_data_connection (&connection, &name);
+  else
     {
       ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
-      return (ST_FAILURE);
+      status = ST_FAILURE;
     }
-
-  session (&connection);
-
-  pthread_cleanup_pop (!0);
-
   
-  return (ST_SUCCESS);
+  pthread_cleanup_pop (!0);
+  
+  return (status);
 }
 
 status_t

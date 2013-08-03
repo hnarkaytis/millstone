@@ -33,7 +33,8 @@ TYPEDEF_STRUCT (context_t,
 
 TYPEDEF_STRUCT (connection_t,
 		(context_t *, context),
-		int conn_fd,
+		int cmd_fd,
+		int data_fd,
 		)
 
 TYPEDEF_STRUCT (block_id_t,

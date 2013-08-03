@@ -325,10 +325,13 @@ static status_t
 start_session (connection_t * connection)
 {
   client_t client = { .connection = connection };
-  status_t status = send_file_meta (connection);
   msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
   msg_t cmd_in_array_data[MSG_IN_QUEUE_SIZE];
   msg_t data_in_array_data[MSG_IN_QUEUE_SIZE];
+  
+  status_t status = send_file_meta (connection);
+  if (ST_SUCCESS != status)
+    return (status);
   
   status = MSG_QUEUE_INIT (&client.cmd_out, cmd_out_array_data);
   if (ST_SUCCESS != status)

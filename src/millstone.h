@@ -16,8 +16,10 @@ TYPEDEF_ENUM (run_mode_t, RM_SERVER, RM_CLIENT)
 
 TYPEDEF_STRUCT (config_t,
 		(run_mode_t, run_mode),
-		(char *, src),
-		(char *, dst),
+		string_t src_file,
+		string_t dst_file,
+		string_t dst_host,
+		int port,
 		)
 
 TYPEDEF_STRUCT (block_id_t,

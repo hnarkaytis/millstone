@@ -41,13 +41,37 @@ parse_args (int argc, char * argv[], config_t * config)
     config->run_mode = RM_SERVER;
   else if (argc - optind == 2)
     {
+      char * dst = argv[optind + 1];
+      char * semicollon = strchr (dst, ':');
+      char * slash = strchr (dst, '/');
+
       config->run_mode = RM_CLIENT;
-      config->src = argv[optind];
-      config->dst = argv[optind + 1];
+      config->src_file = argv[optind];
+      config->dst_host = dst;
+
+      if (slash)
+	{
+	  config->dst_file = slash + 1;
+	  *slash = 0;
+	}
+      else
+	config->dst_file = config->src_file;
+      
+      if (semicollon)
+	{
+	  char * end;
+	  config->port = strtol (semicollon + 1, &end, 10);
+	  if (0 != *end)
+	    {
+	      ERROR_MSG ("Can't parse port number from '%s'", dst);
+	      return (ST_FAILURE);
+	    }
+	  *semicollon = 0;
+	}
     }
   else
     {
-      ERROR_MSG ("Unexpected number of arguments.\n./%s [OPTION...] - server mode\n%s SRC DST - client mode",
+      ERROR_MSG ("Unexpected number of arguments.\n%s [OPTION...] - server mode\n%s SRC DST - client mode",
 		 argv[0], argv[0]);
       return (ST_FAILURE);
     }

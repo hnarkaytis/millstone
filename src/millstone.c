@@ -90,7 +90,7 @@ int main (int argc, char * argv[])
     case RM_SERVER:
       break;
     case RM_CLIENT:
-      status = client (&config);
+      status = start_client (&config);
       break;
     default:
       status = ST_FAILURE;

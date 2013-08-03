@@ -8,7 +8,19 @@
 #include <pthread.h>
 
 #include <client.h>
+#include <queue.h>
 #include <logging.h>
+
+TYPEDEF_STRUCT (client_t,
+		(connection_t *, connection),
+		(queue_t, data_in),
+		(queue_t, cmd_in),
+		(queue_t, cmd_out),
+		)
+
+#ifndef SD_BOTH
+#define SD_BOTH (2)
+#endif /* SD_BOTH */
 
 static status_t
 send_file_meta (connection_t * connection)
@@ -18,8 +30,7 @@ send_file_meta (connection_t * connection)
     { .iov_len = strlen (connection->context->config->dst_file) + 1, .iov_base = connection->context->config->dst_file },
   };
 
-  int rv = TEMP_FAILURE_RETRY (writev (connection->cmd_fd, iov,
-                                       sizeof (iov) / sizeof (iov[0])));
+  int rv = TEMP_FAILURE_RETRY (writev (connection->cmd_fd, iov, sizeof (iov) / sizeof (iov[0])));
   int i, len = 0;
   for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
     len = iov[i].iov_len;
@@ -27,21 +38,125 @@ send_file_meta (connection_t * connection)
   status_t status = ST_SUCCESS;
   if (rv != len)
     {
-      ERROR_MSG ("Failed to send hand shake message (sent %d bytes, but expexted to send %d bytes)", rv, len);
+      ERROR_MSG ("Failed to send hand shake message (sent %d bytes, but expexted %d bytes)", rv, len);
       status = ST_FAILURE;
     }
   return (status);
 }
 
 static status_t
-session (connection_t * connection)
+msg_recv (int fd, msg_t * msg)
 {
-  status_t status = send_file_meta (connection);
+  int len = sizeof (*msg);
+  int rv = TEMP_FAILURE_RETRY (read (fd, msg, len));
+  status_t status = ST_SUCCESS;
+  if (rv != len)
+    {
+      ERROR_MSG ("Failed to reveive message (got %d bytes, but expexted %d bytes)", rv, len);
+      status = ST_FAILURE;
+    }
+  return (status);
+}
 
+static status_t
+msg_send (int fd, msg_t * msg)
+{
+  int len = sizeof (*msg);
+  int rv = TEMP_FAILURE_RETRY (write (fd, msg, len));
+  status_t status = ST_SUCCESS;
+  if (rv != len)
+    {
+      ERROR_MSG ("Failed to send message (got %d bytes, but expexted %d bytes)", rv, len);
+      status = ST_FAILURE;
+    }
+  return (status);
+}
+
+static status_t
+reader (client_t * client)
+{
+  status_t status;
+  for (;;)
+    {
+      msg_t msg;
+      status = msg_recv (client->connection->cmd_fd, &msg);
+      if (ST_SUCCESS != status)
+	break;
+      if (MT_TERMINATE == msg.msg_type)
+	break;
+      switch (msg.msg_type)
+	{
+	case MT_BLOCK_DIGEST:
+	  break;
+	default:
+	  status = ST_FAILURE;
+	  break;
+	}
+      if (ST_SUCCESS != status)
+	break;
+    }
+  return (status);
+}
+
+static void *
+data_writer (void * arg)
+{
+  client_t * client = arg;
+  client->connection->cmd_fd = 0;
+  return (NULL);
+}
+
+static void *
+cmd_writer (void * arg)
+{
+  client_t * client = arg;
+  for (;;)
+    {
+      msg_t msg;
+      //queue_pop (&client->cmd_out, &msg);
+      memset (&msg, 0, sizeof (msg));
+      status_t status = msg_send (client->connection->cmd_fd, &msg);
+      if (ST_SUCCESS != status)
+	break;
+    }
+  shutdown (client->connection->cmd_fd, SD_BOTH);
+  close (client->connection->cmd_fd);
+  return (NULL);
+}
+
+static status_t
+start_session (connection_t * connection)
+{
+  int rv;
+  pthread_t cmd_writer_id, data_writer_id;
+  client_t client = { .connection = connection };
+  status_t status = send_file_meta (connection);
+  
   if (ST_SUCCESS != status)
     return (ST_FAILURE);
+
+  rv = pthread_create (&cmd_writer_id, NULL, cmd_writer, &client);
+  if (rv != 0)
+    {
+      ERROR_MSG ("Failed to start command writer thread");
+      return (ST_FAILURE);
+    }
   
-  return (ST_SUCCESS);
+  rv = pthread_create (&data_writer_id, NULL, data_writer, &client);
+  if (rv != 0)
+    {
+      ERROR_MSG ("Failed to start command writer thread");
+      return (ST_FAILURE);
+    }
+  
+  status = reader (&client);
+  
+  pthread_cancel (cmd_writer_id);
+  pthread_join (cmd_writer_id, NULL);
+  pthread_cancel (data_writer_id);
+  pthread_join (data_writer_id, NULL);
+  
+  return (status);
 }
 
 static status_t
@@ -59,7 +174,7 @@ open_data_connection (connection_t * connection, struct sockaddr_in * name)
 
   int rv = TEMP_FAILURE_RETRY (connect (connection->data_fd, (struct sockaddr *)name, sizeof (*name)));
   if (-1 != rv)
-    status = session (connection);
+    status = start_session (connection);
   else
     {
       ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
@@ -113,7 +228,7 @@ connect_to_server (context_t * context)
 }
 
 status_t
-client (config_t * config)
+start_client (config_t * config)
 {
   status_t status = ST_FAILURE;
   context_t context = { .config = config };

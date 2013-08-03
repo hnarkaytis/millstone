@@ -64,8 +64,10 @@ TYPEDEF_UNION (msg_data_t,
 	       )
 
 TYPEDEF_ENUM (msg_type_t,
+	      MT_TERMINATE,
 	      (MT_BLOCK_REQUEST, , "block_id"),
 	      (MT_BLOCK_SENT, , "block_id"),
+	      (MT_BLOCK_ERROR, , "block_id"),
 	      (MT_BLOCK_MATCHED, , "block_matched"),
 	      (MT_BLOCK_DIGEST, , "block_digest"),
 	      )

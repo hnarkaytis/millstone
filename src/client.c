@@ -88,12 +88,6 @@ close_connection (int fd)
   close (fd);
 }
 
-static void
-close_connection_void (void * arg)
-{
-  close_connection ((long)arg);
-}
-
 static status_t
 reader (client_t * client)
 {
@@ -359,8 +353,6 @@ open_data_connection (connection_t * connection, struct sockaddr_in * name)
       return (ST_FAILURE);
     }
 
-  pthread_cleanup_push (close_connection_void, (void*)(long)connection->data_fd);
-
   int rv = TEMP_FAILURE_RETRY (connect (connection->data_fd, (struct sockaddr *)name, sizeof (*name)));
   if (-1 != rv)
     status = start_session (connection);
@@ -369,8 +361,8 @@ open_data_connection (connection_t * connection, struct sockaddr_in * name)
       ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
       return (ST_FAILURE);
     }
-  
-  pthread_cleanup_pop (!0);
+
+  close_connection (connection->data_fd);
 
   return (status);
 }
@@ -391,8 +383,6 @@ connect_to_server (context_t * context)
       return (ST_FAILURE);
     }
 
-  pthread_cleanup_push (close_connection_void, (void*)(long)connection.cmd_fd);
-
   struct hostent * hostinfo = gethostbyname (context->config->dst_host);
   if (hostinfo != NULL)
     name.sin_addr.s_addr = *((in_addr_t*) hostinfo->h_addr);
@@ -410,8 +400,8 @@ connect_to_server (context_t * context)
       ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
       status = ST_FAILURE;
     }
-  
-  pthread_cleanup_pop (!0);
+
+  close_connection (connection.cmd_fd);
   
   return (status);
 }
@@ -430,10 +420,8 @@ start_client (config_t * config)
     }
 
   context.size = lseek64 (context.file_fd, 0, SEEK_END);
-  
-  pthread_cleanup_push ((void (*) (void*))close, (void*)(long)context.file_fd);
   status = connect_to_server (&context);
-  pthread_cleanup_pop (!0);
+  close (context.file_fd);
 
   return (status);
 }

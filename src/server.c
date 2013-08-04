@@ -4,12 +4,18 @@
 #include <file_meta.h>
 #include <queue.h>
 #include <msg.h>
+#include <calc_digest.h>
 #include <server.h>
 
 #include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close, ftruncate64 */
 #include <errno.h> /* errno, strerror */
+#include <sys/user.h> /* PAGE_SIZE */
 
 #include <pthread.h>
+
+#define SPLIT_RATIO (128)
+#define MIN_BLOCK_SIZE (PAGE_SIZE)
+#define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO * SPLIT_RATIO)
 
 TYPEDEF_STRUCT (task_t,
 		(block_id_t, block_id),
@@ -46,21 +52,31 @@ server_data_reader (void * arg)
   return (NULL);
 }
 
-static status_t
-do_task (task_t * task)
-{
-  return (ST_SUCCESS);
-}
-
 static void *
 server_worker (void * arg)
 {
   server_t * server = arg;
+  task_t task;
+  msg_t msg;
+  off64_t offset;
+
+  memset (&msg, 0, sizeof (msg));
   for (;;)
     {
-      task_t task;
       queue_pop (&server->task_queue.queue, &task);
-      do_task (&task);
+  
+      msg.msg_type = MT_BLOCK_DIGEST;
+      msg.msg_data.block_id.size = task.size;
+      for (offset = 0; offset < task.block_id.size; offset += task.size)
+	{
+	  msg.msg_data.block_id.offset = task.block_id.offset + offset;
+	  if (offset + task.size > task.block_id.size)
+	    msg.msg_data.block_id.size = task.block_id.size - offset;
+	  status_t status = calc_digest (&msg.msg_data.block_digest, server->connection->context->file_fd);
+	  if (ST_SUCCESS != status)
+	    break;
+	  queue_push (&server->cmd_out.queue, &msg);
+	}
     }
   return (NULL);
 }

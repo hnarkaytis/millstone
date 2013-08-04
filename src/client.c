@@ -3,6 +3,7 @@
 #include <msg.h>
 #include <logging.h>
 #include <file_meta.h>
+#include <calc_digest.h>
 #include <client.h>
 
 #define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
@@ -12,8 +13,8 @@
 #include <string.h> /* memset, setlen */
 #include <netdb.h> /* gethostbyname */
 #include <netinet/in.h> /* htonl, struct sockaddr_in */
-#include <sys/uio.h> /* writev, struct iovec */
 #include <sys/mman.h> /* mmap64, unmap */
+#include <sys/uio.h> /* writev, struct iovec */
 #include <sys/socket.h> /* socket, shutdown, connect */
 
 #include <openssl/sha.h> /* SHA1 */
@@ -130,26 +131,6 @@ client_cmd_writer (void * arg)
     }
   shutdown (client->connection->cmd_fd, SD_BOTH);
   return (NULL);
-}
-
-static status_t
-calc_digest (block_digest_t * block_digest, int fd)
-{
-  status_t status = ST_FAILURE;
-  unsigned char * data = mmap64 (NULL, block_digest->block_id.size, PROT_READ, MAP_PRIVATE,
-				 fd, block_digest->block_id.offset);
-  if (-1 == (long)data)
-    FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
-  else
-    {
-      SHA1 (data, block_digest->block_id.size, (unsigned char*)block_digest->digest);
-      
-      if (0 != munmap (data, block_digest->block_id.size))
-	ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
-      else
-	status = ST_SUCCESS;
-    }
-  return (status);
 }
 
 static void *

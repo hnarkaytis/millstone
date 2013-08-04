@@ -1,14 +1,17 @@
-#define _LARGEFILE64_SOURCE
-#define _GNU_SOURCE
-#include <unistd.h> /* TEMP_FAILURE_RETRY */
+#define _LARGEFILE64_SOURCE /* open64, lseek64, mmap64 */
+#define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
+#include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf */
 #include <errno.h> /* errno for TEMP_FAILURE_RETRY */
 #include <fcntl.h> /* close */
 #include <string.h> /* memset, setlen */
+#include <errno.h> /* errno, strerror */
 #include <netdb.h> /* gethostbyname */
+#include <netinet/in.h> /* htonl */
 #include <sys/uio.h> /* iovec */
 #include <sys/mman.h> /* mmap64, unmap */
-#include <sys/socket.h> /* shutdown, connect */
+#include <sys/socket.h> /* socket, shutdown, connect */
 
+#include <openssl/sha.h> /* SHA1 */
 #include <pthread.h>
 
 #include <queue.h>

@@ -10,8 +10,8 @@
 status_t
 msg_recv (int fd, msg_t * msg)
 {
-  int len = sizeof (*msg);
-  int rv = TEMP_FAILURE_RETRY (read (fd, msg, len));
+  ssize_t len = sizeof (*msg);
+  ssize_t rv = TEMP_FAILURE_RETRY (read (fd, msg, len));
   status_t status = ST_SUCCESS;
   if (rv != len)
     {
@@ -24,8 +24,8 @@ msg_recv (int fd, msg_t * msg)
 status_t
 msg_send (int fd, msg_t * msg)
 {
-  int len = sizeof (*msg);
-  int rv = TEMP_FAILURE_RETRY (write (fd, msg, len));
+  ssize_t len = sizeof (*msg);
+  ssize_t rv = TEMP_FAILURE_RETRY (write (fd, msg, len));
   status_t status = ST_SUCCESS;
   if (rv != len)
     {

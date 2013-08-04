@@ -1,11 +1,11 @@
-#define _LARGEFILE64_SOURCE
-#include <stdlib.h>
-#include <getopt.h>
-
 #include <millstone.h>
 #include <logging.h>
 #include <client.h>
 #include <server.h>
+
+#include <stdlib.h> /* EXIT_*, strtol */
+#include <string.h> /* memset, strchr */
+#include <getopt.h> /* getopt_long */
 
 #define run_server(...) ST_SUCCESS
 
@@ -23,6 +23,8 @@ parse_args (int argc, char * argv[], config_t * config)
   int option_index = 0;
 
   memset (config, 0, sizeof (*config));
+  config->listen_port = DEFAULT_LISTEN_PORT;
+  
   while ((c = getopt_long (argc, argv, "c", long_options, &option_index)) != -1)
     switch (c)
       {

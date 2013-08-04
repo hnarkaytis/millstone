@@ -1,10 +1,15 @@
-#define _LARGEFILE64_SOURCE /* open64, lseek64, mmap64 */
+#include <millstone.h>
+#include <block.h>
+#include <msg.h>
+#include <logging.h>
+#include <file_meta.h>
+#include <client.h>
+
 #define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
-#include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close */
-#include <errno.h> /* errno for TEMP_FAILURE_RETRY */
-#include <fcntl.h> /* open64, lseek64, SEEK_END */
-#include <string.h> /* memset, setlen */
+#include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close, lseek64, SEEK_END */
 #include <errno.h> /* errno, strerror */
+#include <fcntl.h> /* open64 */
+#include <string.h> /* memset, setlen */
 #include <netdb.h> /* gethostbyname */
 #include <netinet/in.h> /* htonl, struct sockaddr_in */
 #include <sys/uio.h> /* writev, struct iovec */
@@ -13,14 +18,6 @@
 
 #include <openssl/sha.h> /* SHA1 */
 #include <pthread.h>
-
-#include <block.h>
-#include <msg.h>
-#include <logging.h>
-#include <client.h>
-
-#define MSG_OUT_QUEUE_SIZE (2)
-#define MSG_IN_QUEUE_SIZE (16)
 
 TYPEDEF_STRUCT (client_t,
 		(connection_t *, connection),
@@ -38,28 +35,6 @@ close_connection (int fd)
 {
   shutdown (fd, SD_BOTH);
   close (fd);
-}
-
-static status_t
-send_file_meta (connection_t * connection)
-{
-  const struct iovec iov[] = {
-    { .iov_len = sizeof (connection->context->size), .iov_base = &connection->context->size },
-    { .iov_len = strlen (connection->context->config->dst_file) + 1, .iov_base = connection->context->config->dst_file },
-  };
-
-  int rv = TEMP_FAILURE_RETRY (writev (connection->cmd_fd, iov, sizeof (iov) / sizeof (iov[0])));
-  int i, len = 0;
-  for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
-    len = iov[i].iov_len;
-
-  status_t status = ST_SUCCESS;
-  if (rv != len)
-    {
-      ERROR_MSG ("Failed to send hand shake message (sent %d bytes, but expexted %d bytes)", rv, len);
-      status = ST_FAILURE;
-    }
-  return (status);
 }
 
 static status_t
@@ -109,8 +84,8 @@ send_block (client_t * client, block_id_t * block_id)
     { .iov_len = block_id->size, .iov_base = data },
   };
 
-  int rv = TEMP_FAILURE_RETRY (writev (client->connection->data_fd, iov, sizeof (iov) / sizeof (iov[0])));
-  int i, len = 0;
+  ssize_t rv = TEMP_FAILURE_RETRY (writev (client->connection->data_fd, iov, sizeof (iov) / sizeof (iov[0])));
+  ssize_t i, len = 0;
   for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
     len = iov[i].iov_len;
 
@@ -338,7 +313,7 @@ connect_to_server (context_t * context)
   };
 
   connection.cmd_fd = socket (PF_INET, SOCK_STREAM, 0);
-  if (connection.cmd_fd <= 0)
+  if (connection.cmd_fd < 0)
     {
       ERROR_MSG ("Command socket failed errno(%d) '%s'.", errno, strerror (errno));
       return (ST_FAILURE);
@@ -376,7 +351,7 @@ run_client (config_t * config)
   context.file_fd = open64 (config->src_file, O_RDONLY);
   if (context.file_fd <= 0)
     {
-      ERROR_MSG ("Can't open source file '%s'", config->src_file);
+      ERROR_MSG ("Can't open source file '%s'.", config->src_file);
       return (ST_FAILURE);
     }
 

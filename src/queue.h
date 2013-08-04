@@ -1,10 +1,13 @@
 #ifndef _QUEUE_H_
 #define _QUEUE_H_
 
+#include <stddef.h> /* size_t */
 #include <pthread.h>
 #include <semaphore.h>
 
-#include <millstone.h>
+#include <metaresc.h>
+
+#include <millstone.h> /* status_t */
 
 TYPEDEF_STRUCT (queue_t,
 		(mr_rarray_t *, array),

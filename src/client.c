@@ -8,17 +8,13 @@
 
 #include <pthread.h>
 
-#include <client.h>
 #include <queue.h>
+#include <msg.h>
 #include <logging.h>
+#include <client.h>
 
 #define MSG_OUT_QUEUE_SIZE (2)
 #define MSG_IN_QUEUE_SIZE (16)
-
-TYPEDEF_STRUCT (msg_queue_t,
-		(queue_t, queue),
-		RARRAY (msg_t, array),
-		)
 
 TYPEDEF_STRUCT (client_t,
 		(connection_t *, connection),
@@ -301,18 +297,6 @@ start_digest_calculators (client_t * client)
   
   return (status);
 }
-
-static status_t
-msg_queue_init (msg_queue_t * msg_queue, msg_t * array, size_t size)
-{
-  msg_queue->array.data = array;
-  msg_queue->array.size = size;
-  msg_queue->array.alloc_size = -1;
-  status_t status = queue_init (&msg_queue->queue, (mr_rarray_t*)&msg_queue->array, sizeof (msg_queue->array.data[0]));
-  return (status);
-}
-
-#define MSG_QUEUE_INIT(MSG_QUEUE, ARRAY) msg_queue_init (MSG_QUEUE, ARRAY, sizeof (ARRAY))
 
 static status_t
 run_session (connection_t * connection)

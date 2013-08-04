@@ -1,5 +1,9 @@
 /.deps
 /Makefile
 /Makefile.in
+/client.o
+/logging.o
 /millstone
 /millstone.o
+/msg.o
+/queue.o

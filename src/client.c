@@ -27,7 +27,7 @@ TYPEDEF_STRUCT (client_t,
 		)
 
 static status_t
-reader (client_t * client)
+client_cmd_reader (client_t * client)
 {
   status_t status;
   for (;;)
@@ -99,7 +99,7 @@ send_block (client_t * client, block_id_t * block_id)
 }
 
 static void *
-data_writer (void * arg)
+client_data_writer (void * arg)
 {
   client_t * client = arg;
   for (;;)
@@ -117,7 +117,7 @@ data_writer (void * arg)
 }
 
 static void *
-cmd_writer (void * arg)
+client_cmd_writer (void * arg)
 {
   client_t * client = arg;
   for (;;)
@@ -183,18 +183,18 @@ digest_calculator (void * arg)
 static status_t
 start_data_writer (client_t * client)
 {
-  pthread_t data_writer_id;
-  int rv = pthread_create (&data_writer_id, NULL, data_writer, &client);
+  pthread_t id;
+  int rv = pthread_create (&id, NULL, client_data_writer, &client);
   if (rv != 0)
     {
       ERROR_MSG ("Failed to start command writer thread");
       return (ST_FAILURE);
     }
   
-  status_t status = reader (client);
+  status_t status = client_cmd_reader (client);
   
-  pthread_cancel (data_writer_id);
-  pthread_join (data_writer_id, NULL);
+  pthread_cancel (id);
+  pthread_join (id, NULL);
 
   return (status);
 }
@@ -202,8 +202,8 @@ start_data_writer (client_t * client)
 static status_t
 start_cmd_writer (client_t * client)
 {
-  pthread_t cmd_writer_id;
-  int rv = pthread_create (&cmd_writer_id, NULL, cmd_writer, &client);
+  pthread_t id;
+  int rv = pthread_create (&id, NULL, client_cmd_writer, &client);
   if (rv != 0)
     {
       ERROR_MSG ("Failed to start command writer thread");
@@ -212,8 +212,8 @@ start_cmd_writer (client_t * client)
 
   status_t status = start_data_writer (client);
   
-  pthread_cancel (cmd_writer_id);
-  pthread_join (cmd_writer_id, NULL);
+  pthread_cancel (id);
+  pthread_join (id, NULL);
   
   return (status);
 }

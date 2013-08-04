@@ -34,19 +34,42 @@ TYPEDEF_STRUCT (accepter_ctx_t,
 		(pthread_mutex_t, mutex),
 		)
 
+static void *
+server_cmd_reader (void * arg)
+{
+  return (NULL);
+}
+
+static status_t
+start_data_reader (server_t * server)
+{
+  return (ST_FAILURE);
+}
+
 static status_t
 client_main_loop (connection_t * connection)
 {
-#if 0
-  msg_t cmd_in_array_data[MSG_IN_QUEUE_SIZE];
+  server_t server = { .connection = connection, };
+  msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
 
-  status = MSG_QUEUE_INIT (&client.cmd_in, cmd_in_array_data);
+  status_t status = MSG_QUEUE_INIT (&server.cmd_out, cmd_out_array_data);
   if (ST_SUCCESS != status)
     return (status);
-  status_t status = client_main_loop (&connection);
+
+  pthread_t id;
+  int rv = pthread_create (&id, NULL, server_cmd_reader, &server);
+  if (rv != 0)
+    {
+      ERROR_MSG ("Failed to start command reader thread.");
+      return (ST_FAILURE);
+    }
+  
+  status = start_data_reader (&server);
+
+  pthread_cancel (id);
+  pthread_join (id, NULL);
+  
   return (status);
-#endif
-  return (ST_FAILURE);
 }
 
 static status_t

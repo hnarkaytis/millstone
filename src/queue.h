@@ -3,7 +3,6 @@
 
 #include <stddef.h> /* size_t */
 #include <pthread.h>
-#include <semaphore.h>
 
 #include <metaresc.h>
 

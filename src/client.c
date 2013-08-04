@@ -28,41 +28,6 @@ TYPEDEF_STRUCT (client_t,
 		)
 
 static status_t
-client_cmd_reader (client_t * client)
-{
-  status_t status;
-  for (;;)
-    {
-      msg_t msg;
-      status = msg_recv (client->connection->cmd_fd, &msg);
-      if (ST_SUCCESS != status)
-	break;
-      if (MT_TERMINATE == msg.msg_type)
-	{
-	  INFO_MSG ("Got termination command.");
-	  break;
-	}
-      
-      switch (msg.msg_type)
-	{
-	case MT_BLOCK_DIGEST:
-	  queue_push (&client->cmd_in.queue, &msg);
-	  break;
-	case MT_BLOCK_REQUEST:
-	  queue_push (&client->data_in.queue, &msg);
-	  break;
-	default:
-	  ERROR_MSG ("Unexpected message type %d.", msg.msg_type);
-	  status = ST_FAILURE;
-	  break;
-	}
-      if (ST_SUCCESS != status)
-	break;
-    }
-  return (status);
-}
-
-static status_t
 send_block (client_t * client, block_id_t * block_id)
 {
   unsigned char * data = mmap64 (NULL, block_id->size, PROT_READ, MAP_PRIVATE,
@@ -159,6 +124,41 @@ digest_calculator (void * arg)
       queue_push (&client->cmd_out.queue, &msg);
     }
   return (NULL);
+}
+
+static status_t
+client_cmd_reader (client_t * client)
+{
+  status_t status;
+  for (;;)
+    {
+      msg_t msg;
+      status = msg_recv (client->connection->cmd_fd, &msg);
+      if (ST_SUCCESS != status)
+	break;
+      if (MT_TERMINATE == msg.msg_type)
+	{
+	  INFO_MSG ("Got termination command.");
+	  break;
+	}
+      
+      switch (msg.msg_type)
+	{
+	case MT_BLOCK_DIGEST:
+	  queue_push (&client->cmd_in.queue, &msg);
+	  break;
+	case MT_BLOCK_REQUEST:
+	  queue_push (&client->data_in.queue, &msg);
+	  break;
+	default:
+	  ERROR_MSG ("Unexpected message type %d.", msg.msg_type);
+	  status = ST_FAILURE;
+	  break;
+	}
+      if (ST_SUCCESS != status)
+	break;
+    }
+  return (status);
 }
 
 static status_t

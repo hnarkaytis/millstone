@@ -5,7 +5,6 @@
 
 #include <millstone.h> /* status_t */
 #include <block.h> /* block_*_t */
-#include <queue.h> /* queue_t */
 
 TYPEDEF_UNION (msg_data_t,
 	       (block_id_t, block_id),
@@ -32,16 +31,10 @@ TYPEDEF_STRUCT (msg_queue_t,
 		RARRAY (msg_t, array),
 		)
 
-static inline status_t
-msg_queue_init (msg_queue_t * msg_queue, msg_t * array, size_t size)
-{
-  msg_queue->array.data = array;
-  msg_queue->array.size = size;
-  msg_queue->array.alloc_size = -1;
-  status_t status = queue_init (&msg_queue->queue, (mr_rarray_t*)&msg_queue->array, sizeof (msg_queue->array.data[0]));
-  return (status);
-}
-
 #define MSG_QUEUE_INIT(MSG_QUEUE, ARRAY) msg_queue_init (MSG_QUEUE, ARRAY, sizeof (ARRAY))
+
+extern status_t msg_queue_init (msg_queue_t * msg_queue, msg_t * array, size_t size);
+extern status_t msg_send (int fd, msg_t * msg);
+extern status_t msg_recv (int fd, msg_t * msg);
 
 #endif /* _MSG_H_ */

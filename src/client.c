@@ -1,10 +1,13 @@
 #define _LARGEFILE64_SOURCE
 #define _GNU_SOURCE
-#include <unistd.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <errno.h>
-#include <sys/mman.h>
+#include <unistd.h> /* TEMP_FAILURE_RETRY */
+#include <errno.h> /* errno for TEMP_FAILURE_RETRY */
+#include <fcntl.h> /* close */
+#include <string.h> /* memset, setlen */
+#include <netdb.h> /* gethostbyname */
+#include <sys/uio.h> /* iovec */
+#include <sys/mman.h> /* mmap64, unmap */
+#include <sys/socket.h> /* shutdown, connect */
 
 #include <pthread.h>
 
@@ -44,34 +47,6 @@ send_file_meta (connection_t * connection)
   if (rv != len)
     {
       ERROR_MSG ("Failed to send hand shake message (sent %d bytes, but expexted %d bytes)", rv, len);
-      status = ST_FAILURE;
-    }
-  return (status);
-}
-
-static status_t
-msg_recv (int fd, msg_t * msg)
-{
-  int len = sizeof (*msg);
-  int rv = TEMP_FAILURE_RETRY (read (fd, msg, len));
-  status_t status = ST_SUCCESS;
-  if (rv != len)
-    {
-      ERROR_MSG ("Failed to reveive message (got %d bytes, but expexted %d bytes)", rv, len);
-      status = ST_FAILURE;
-    }
-  return (status);
-}
-
-static status_t
-msg_send (int fd, msg_t * msg)
-{
-  int len = sizeof (*msg);
-  int rv = TEMP_FAILURE_RETRY (write (fd, msg, len));
-  status_t status = ST_SUCCESS;
-  if (rv != len)
-    {
-      ERROR_MSG ("Failed to send message (got %d bytes, but expexted %d bytes)", rv, len);
       status = ST_FAILURE;
     }
   return (status);

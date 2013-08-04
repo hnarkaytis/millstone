@@ -40,10 +40,79 @@ server_cmd_reader (void * arg)
   return (NULL);
 }
 
+static void *
+server_data_reader (void * arg)
+{
+  return (NULL);
+}
+
+static status_t
+do_task (task_t * task)
+{
+  return (ST_SUCCESS);
+}
+
+static void *
+server_worker (void * arg)
+{
+  server_t * server = arg;
+  for (;;)
+    {
+      task_t task;
+      queue_pop (&server->task_queue.queue, &task);
+      do_task (&task);
+    }
+  return (NULL);
+}
+
+static status_t
+server_cmd_writer (server_t * server)
+{
+  return (ST_SUCCESS);
+}
+
+static status_t
+start_workers (server_t * server)
+{
+  int i, ncpu = (long) sysconf (_SC_NPROCESSORS_ONLN);
+  pthread_t ids[ncpu];
+  status_t status = ST_SUCCESS;
+
+  for (i = 0; i < ncpu; ++i)
+    {
+      status = pthread_create (&ids[i], NULL, server_worker, server);
+      if (ST_SUCCESS != status)
+	break;
+    }
+
+  if (ST_SUCCESS == status)
+    status = server_cmd_writer (server);
+
+  for ( ; i>= 0; --i)
+    {
+      pthread_cancel (ids[i]);
+      pthread_join (ids[i], NULL);
+    }
+  
+  return (status);
+}
+
 static status_t
 start_data_reader (server_t * server)
 {
-  return (ST_FAILURE);
+  pthread_t id;
+  int rv = pthread_create (&id, NULL, server_data_reader, &server);
+  if (rv != 0)
+    {
+      ERROR_MSG ("Failed to start data reader thread.");
+      return (ST_FAILURE);
+    }
+  
+  status_t status = start_workers (server);
+
+  pthread_cancel (id);
+  pthread_join (id, NULL);
+  return (status);
 }
 
 static status_t

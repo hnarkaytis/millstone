@@ -2,6 +2,7 @@
 /Makefile
 /Makefile.in
 /client.o
+/file_meta.o
 /logging.o
 /millstone
 /millstone.o

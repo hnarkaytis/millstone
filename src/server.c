@@ -108,19 +108,19 @@ start_workers (server_t * server)
 {
   int i, ncpu = (long) sysconf (_SC_NPROCESSORS_ONLN);
   pthread_t ids[ncpu];
-  status_t status = ST_SUCCESS;
+  status_t status = ST_FAILURE;
 
   for (i = 0; i < ncpu; ++i)
     {
-      status = pthread_create (&ids[i], NULL, server_worker, server);
-      if (ST_SUCCESS != status)
+      int rv = pthread_create (&ids[i], NULL, server_worker, server);
+      if (rv != 0)
 	break;
     }
 
-  if (ST_SUCCESS == status)
+  if (i > 0)
     status = server_cmd_writer (server);
 
-  for ( ; i>= 0; --i)
+  for ( ; i >= 0; --i)
     {
       pthread_cancel (ids[i]);
       pthread_join (ids[i], NULL);
@@ -129,12 +129,12 @@ start_workers (server_t * server)
   return (status);
 }
 
-static status_t
-retrive_file (server_t * server)
+static void *
+data_retrieval (void * arg)
 {
+  server_t * server = arg;
   msg_t msg;
   off64_t offset;
-  status_t status = ST_SUCCESS;
   
   memset (&msg, 0, sizeof (msg));
   msg.msg_type = MT_BLOCK_REQUEST;
@@ -143,10 +143,27 @@ retrive_file (server_t * server)
     {
       if (msg.msg_data.block_id.size > server->connection->context->size - offset)
 	msg.msg_data.block_id.size = server->connection->context->size - offset;
-      status = msg_send (server->connection->cmd_fd, &msg);
-      if (status != ST_SUCCESS)
-	break;
+      queue_push (&server->cmd_out.queue, &msg);
     }
+  return (NULL);
+}
+
+static status_t
+start_data_retrieval (server_t * server)
+{
+  pthread_t id;
+  status_t status;
+  int rv = pthread_create (&id, NULL, data_retrieval, &server);
+  if (rv != 0)
+    {
+      ERROR_MSG ("Failed to start data retrieval thread.");
+      return (ST_FAILURE);
+    }
+
+  status = server_cmd_writer (server);
+
+  pthread_cancel (id);
+  pthread_join (id, NULL);
   return (status);
 }
 
@@ -165,7 +182,7 @@ start_data_reader (server_t * server)
   if (server->connection->context->file_exists)
     status = start_workers (server);
   else
-    status = retrive_file (server);
+    status = start_data_retrieval (server);
 
   pthread_cancel (id);
   pthread_join (id, NULL);

@@ -204,19 +204,19 @@ start_digest_calculators (client_t * client)
 {
   int i, ncpu = (long) sysconf (_SC_NPROCESSORS_ONLN);
   pthread_t ids[ncpu];
-  status_t status = ST_SUCCESS;
+  status_t status = ST_FAILURE;
 
   for (i = 0; i < ncpu; ++i)
     {
-      status = pthread_create (&ids[i], NULL, digest_calculator, client);
-      if (ST_SUCCESS != status)
+      int rv = pthread_create (&ids[i], NULL, digest_calculator, client);
+      if (rv != 0)
 	break;
     }
 
-  if (ST_SUCCESS == status)
+  if (i > 0)
     status = start_cmd_writer (client);
 
-  for ( ; i>= 0; --i)
+  for ( ; i >= 0; --i)
     {
       pthread_cancel (ids[i]);
       pthread_join (ids[i], NULL);

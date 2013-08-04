@@ -8,3 +8,4 @@
 /millstone.o
 /msg.o
 /queue.o
+/server.o

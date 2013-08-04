@@ -3,6 +3,7 @@
 #include <msg.h>
 #include <logging.h>
 #include <file_meta.h>
+#include <close_connection.h>
 #include <client.h>
 
 #define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
@@ -25,17 +26,6 @@ TYPEDEF_STRUCT (client_t,
 		(msg_queue_t, cmd_in),
 		(msg_queue_t, cmd_out),
 		)
-
-#ifndef SD_BOTH
-#define SD_BOTH (2)
-#endif /* SD_BOTH */
-
-static void
-close_connection (int fd)
-{
-  shutdown (fd, SD_BOTH);
-  close (fd);
-}
 
 static status_t
 reader (client_t * client)

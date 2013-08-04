@@ -7,8 +7,6 @@
 #include <string.h> /* memset, strchr */
 #include <getopt.h> /* getopt_long */
 
-#define run_server(...) ST_SUCCESS
-
 static status_t
 parse_args (int argc, char * argv[], config_t * config)
 {

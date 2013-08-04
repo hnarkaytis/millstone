@@ -1,7 +1,12 @@
 #ifndef _MILLSTONE_H_
 #define _MILLSTONE_H_
 
+#ifndef _LARGEFILE64_SOURCE
+#define _LARGEFILE64_SOURCE
+#endif /* _LARGEFILE64_SOURCE */
+
 #include <stddef.h> /* size_t */
+#include <netinet/in.h> /* struct sockaddr_in */
 
 #include <metaresc.h>
 
@@ -28,6 +33,7 @@ TYPEDEF_STRUCT (context_t,
 
 TYPEDEF_STRUCT (connection_t,
 		(context_t *, context),
+		(struct sockaddr_in, name),
 		int cmd_fd,
 		int data_fd,
 		)

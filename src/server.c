@@ -31,15 +31,26 @@ client_main_loop (connection_t * connection)
   status = MSG_QUEUE_INIT (&client.cmd_in, cmd_in_array_data);
   if (ST_SUCCESS != status)
     return (status);
+  status_t status = client_main_loop (&connection);
+  return (status);
 #endif
   return (ST_FAILURE);
 }
 
 static status_t
-start_data_socket (context_t * context, struct sockaddr_in * name)
+start_data_socket (connection_t * connection)
 {
-  connection_t connection = { .context = context, };
-  status_t status = client_main_loop (&connection);
+  status_t status;
+  connection->data_fd = socket (PF_INET, SOCK_DGRAM, 0);
+  if (connection->data_fd < 0)
+    {
+      ERROR_MSG ("socket failed errno(%d) '%s'.", errno, strerror (errno));
+      return (ST_FAILURE);
+    }
+
+  status = client_main_loop (connection);
+  close (connection->data_fd);
+  
   return (status);
 }
 
@@ -51,14 +62,19 @@ handle_client (void * arg)
   pthread_mutex_unlock (&ctx->mutex);
 
   context_t context = { .config = accepter_ctx.config, };
-  connection_t connection = { .context = &context, .cmd_fd = accepter_ctx.fd, };
+  connection_t connection = {
+    .context = &context,
+    .cmd_fd = accepter_ctx.fd,
+    .name = accepter_ctx.clientname,
+  };
   bool file_exists = false;
   status_t status = read_file_meta (&connection, &file_exists);
   
   if (ST_SUCCESS == status)
-    start_data_socket (&context, &accepter_ctx.clientname);
+    start_data_socket (&connection);
 
   close (context.file_fd);
+  close_connection (accepter_ctx.fd);
   
   return (NULL);
 }

@@ -3,8 +3,11 @@
 #include <getopt.h>
 
 #include <millstone.h>
-#include <client.h>
 #include <logging.h>
+#include <client.h>
+#include <server.h>
+
+#define run_server(...) ST_SUCCESS
 
 static status_t
 parse_args (int argc, char * argv[], config_t * config)
@@ -88,9 +91,10 @@ int main (int argc, char * argv[])
   switch (config.run_mode)
     {
     case RM_SERVER:
+      status = run_server (&config);
       break;
     case RM_CLIENT:
-      status = start_client (&config);
+      status = run_client (&config);
       break;
     default:
       status = ST_FAILURE;
@@ -99,5 +103,3 @@ int main (int argc, char * argv[])
 
   return ((ST_SUCCESS != status) ? EXIT_FAILURE : EXIT_SUCCESS);
 }
-
-

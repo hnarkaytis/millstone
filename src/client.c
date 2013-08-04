@@ -147,7 +147,6 @@ send_block (client_t * client, block_id_t * block_id)
       status = ST_FAILURE;
     }
 
-      
   if (0 != munmap (data, block_id->size))
     {
       ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
@@ -316,7 +315,7 @@ msg_queue_init (msg_queue_t * msg_queue, msg_t * array, size_t size)
 #define MSG_QUEUE_INIT(MSG_QUEUE, ARRAY) msg_queue_init (MSG_QUEUE, ARRAY, sizeof (ARRAY))
 
 static status_t
-start_session (connection_t * connection)
+run_session (connection_t * connection)
 {
   client_t client = { .connection = connection };
   msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
@@ -355,7 +354,7 @@ open_data_connection (connection_t * connection, struct sockaddr_in * name)
 
   int rv = TEMP_FAILURE_RETRY (connect (connection->data_fd, (struct sockaddr *)name, sizeof (*name)));
   if (-1 != rv)
-    status = start_session (connection);
+    status = run_session (connection);
   else
     {
       ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
@@ -407,7 +406,7 @@ connect_to_server (context_t * context)
 }
 
 status_t
-start_client (config_t * config)
+run_client (config_t * config)
 {
   status_t status = ST_FAILURE;
   context_t context = { .config = config };

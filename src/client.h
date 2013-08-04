@@ -3,6 +3,6 @@
 
 #include <millstone.h>
 
-status_t start_client (config_t *);
+status_t run_client (config_t *);
 
 #endif /* _CLIENT_H_ */

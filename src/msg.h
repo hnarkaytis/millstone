@@ -5,6 +5,7 @@
 
 #include <millstone.h> /* status_t */
 #include <block.h> /* block_*_t */
+#include <queue.h> /* queue_t */
 
 TYPEDEF_UNION (msg_data_t,
 	       (block_id_t, block_id),

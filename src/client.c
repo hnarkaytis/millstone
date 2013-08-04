@@ -1,20 +1,20 @@
 #define _LARGEFILE64_SOURCE /* open64, lseek64, mmap64 */
 #define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
-#include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf */
+#include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close */
 #include <errno.h> /* errno for TEMP_FAILURE_RETRY */
-#include <fcntl.h> /* close */
+#include <fcntl.h> /* open64, lseek64, SEEK_END */
 #include <string.h> /* memset, setlen */
 #include <errno.h> /* errno, strerror */
 #include <netdb.h> /* gethostbyname */
-#include <netinet/in.h> /* htonl */
-#include <sys/uio.h> /* iovec */
+#include <netinet/in.h> /* htonl, struct sockaddr_in */
+#include <sys/uio.h> /* writev, struct iovec */
 #include <sys/mman.h> /* mmap64, unmap */
 #include <sys/socket.h> /* socket, shutdown, connect */
 
 #include <openssl/sha.h> /* SHA1 */
 #include <pthread.h>
 
-#include <queue.h>
+#include <block.h>
 #include <msg.h>
 #include <logging.h>
 #include <client.h>
@@ -32,6 +32,13 @@ TYPEDEF_STRUCT (client_t,
 #ifndef SD_BOTH
 #define SD_BOTH (2)
 #endif /* SD_BOTH */
+
+static void
+close_connection (int fd)
+{
+  shutdown (fd, SD_BOTH);
+  close (fd);
+}
 
 static status_t
 send_file_meta (connection_t * connection)
@@ -53,13 +60,6 @@ send_file_meta (connection_t * connection)
       status = ST_FAILURE;
     }
   return (status);
-}
-
-static void
-close_connection (int fd)
-{
-  shutdown (fd, SD_BOTH);
-  close (fd);
 }
 
 static status_t

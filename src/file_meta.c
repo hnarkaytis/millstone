@@ -13,7 +13,7 @@
 #include <sys/uio.h> /* writev, struct iovec */
 
 status_t
-read_file_meta (connection_t * connection, bool * file_exists)
+read_file_meta (connection_t * connection)
 {
   ssize_t len = sizeof (connection->context->size);
   ssize_t rv = TEMP_FAILURE_RETRY (read (connection->cmd_fd, &connection->context->size, len));
@@ -40,8 +40,8 @@ read_file_meta (connection_t * connection, bool * file_exists)
   } while (dst_file[count++] != 0);
 
   rv = access (dst_file, F_OK);
-  *file_exists = (0 == rv);
-  if (*file_exists)
+  connection->context->file_exists = (0 == rv);
+  if (connection->context->file_exists)
     {
       rv = access (dst_file, R_OK | W_OK);
       if (rv != 0)

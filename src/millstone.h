@@ -6,6 +6,7 @@
 #endif /* _LARGEFILE64_SOURCE */
 
 #include <stddef.h> /* size_t */
+#include <stdbool.h> /* bool */
 #include <netinet/in.h> /* struct sockaddr_in */
 
 #include <metaresc.h>
@@ -31,6 +32,7 @@ TYPEDEF_STRUCT (config_t,
 
 TYPEDEF_STRUCT (context_t,
 		(config_t *, config),
+		(bool, file_exists),
 		int file_fd,
 		(size_t, size),
 		)

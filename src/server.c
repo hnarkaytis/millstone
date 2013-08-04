@@ -2,6 +2,8 @@
 #include <logging.h>
 #include <block.h>
 #include <file_meta.h>
+#include <queue.h>
+#include <msg.h>
 #include <server.h>
 
 #include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close, ftruncate64 */
@@ -9,9 +11,20 @@
 
 #include <pthread.h>
 
-TYPEDEF_STRUCT (split_task_t,
+TYPEDEF_STRUCT (task_t,
 		(block_id_t, block_id),
 		(size_t, size),
+		)
+
+TYPEDEF_STRUCT (task_queue_t,
+		(queue_t, queue),
+		RARRAY (task_t, array),
+		)
+
+TYPEDEF_STRUCT (server_t,
+		(connection_t *, connection),
+		(msg_queue_t, cmd_out),
+		(task_queue_t, task_queue),
 		)
 
 TYPEDEF_STRUCT (accepter_ctx_t,
@@ -66,8 +79,7 @@ handle_client (void * arg)
     .cmd_fd = accepter_ctx.fd,
     .name = accepter_ctx.clientname,
   };
-  bool file_exists = false;
-  status_t status = read_file_meta (&connection, &file_exists);
+  status_t status = read_file_meta (&connection);
   
   if (ST_SUCCESS == status)
     {

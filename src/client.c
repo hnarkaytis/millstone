@@ -3,7 +3,6 @@
 #include <msg.h>
 #include <logging.h>
 #include <file_meta.h>
-#include <close_connection.h>
 #include <client.h>
 
 #define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
@@ -54,7 +53,6 @@ reader (client_t * client)
       if (ST_SUCCESS != status)
 	break;
     }
-  close_connection (client->connection->cmd_fd);
   return (status);
 }
 
@@ -125,7 +123,7 @@ cmd_writer (void * arg)
       if (ST_SUCCESS != status)
 	break;
     }
-  close_connection (client->connection->cmd_fd);
+  shutdown (client->connection->cmd_fd, SD_BOTH);
   return (NULL);
 }
 
@@ -269,9 +267,24 @@ run_session (connection_t * connection)
 }
 
 static status_t
-open_data_connection (connection_t * connection, struct sockaddr_in * name)
+configure_data_connection (connection_t * connection)
 {
-  status_t status;
+  int rv = TEMP_FAILURE_RETRY (connect (connection->data_fd, (struct sockaddr *)&connection->name, sizeof (connection->name)));
+  if (rv < 0)
+    {
+      ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
+      return (ST_FAILURE);
+    }
+
+  status_t status = run_session (connection);
+  shutdown (connection->data_fd, SD_BOTH);
+
+  return (status);
+}
+
+static status_t
+create_data_socket (connection_t * connection)
+{
   connection->data_fd = socket (PF_INET, SOCK_DGRAM, 0);
   if (connection->data_fd <= 0)
     {
@@ -279,25 +292,41 @@ open_data_connection (connection_t * connection, struct sockaddr_in * name)
       return (ST_FAILURE);
     }
 
-  int rv = TEMP_FAILURE_RETRY (connect (connection->data_fd, (struct sockaddr *)name, sizeof (*name)));
-  if (-1 != rv)
-    status = run_session (connection);
-  else
-    {
-      ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
-      return (ST_FAILURE);
-    }
-
-  close_connection (connection->data_fd);
-
+  status_t status = configure_data_connection (connection);
+  close (connection->data_fd);
+  
   return (status);
 }
 
 static status_t
-connect_to_server (context_t * context)
+connect_to_server (connection_t * connection)
 {
-  status_t status;
-  struct sockaddr_in name;
+  struct hostent * hostinfo = gethostbyname (connection->context->config->dst_host);
+  if (hostinfo != NULL)
+    connection->name.sin_addr.s_addr = *((in_addr_t*) hostinfo->h_addr);
+  else
+    connection->name.sin_addr.s_addr = htonl (INADDR_ANY);
+
+  connection->name.sin_family = AF_INET;
+  connection->name.sin_port = htons (connection->context->config->dst_port);
+
+  int rv = TEMP_FAILURE_RETRY (connect (connection->cmd_fd, (struct sockaddr *)&connection->name, sizeof (connection->name)));
+  if (rv < 0)
+    {
+      ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
+      return (ST_FAILURE);
+    }
+  
+  status_t status = create_data_socket (connection);
+  if (ST_SUCCESS == status)
+    shutdown (connection->cmd_fd, SD_BOTH);
+  
+  return (status);
+}
+
+static status_t
+create_server_socket (context_t * context)
+{
   connection_t connection = {
     .context = context,
   };
@@ -309,25 +338,8 @@ connect_to_server (context_t * context)
       return (ST_FAILURE);
     }
 
-  struct hostent * hostinfo = gethostbyname (context->config->dst_host);
-  if (hostinfo != NULL)
-    name.sin_addr.s_addr = *((in_addr_t*) hostinfo->h_addr);
-  else
-    name.sin_addr.s_addr = htonl (INADDR_ANY);
-
-  name.sin_family = AF_INET;
-  name.sin_port = htons (context->config->dst_port);
-
-  int rv = TEMP_FAILURE_RETRY (connect (connection.cmd_fd, (struct sockaddr *)&name, sizeof (name)));
-  if (-1 != rv)
-    status = open_data_connection (&connection, &name);
-  else
-    {
-      ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
-      status = ST_FAILURE;
-    }
-
-  close_connection (connection.cmd_fd);
+  status_t status = connect_to_server (&connection);
+  close (connection.cmd_fd);
   
   return (status);
 }
@@ -346,7 +358,7 @@ run_client (config_t * config)
     }
 
   context.size = lseek64 (context.file_fd, 0, SEEK_END);
-  status = connect_to_server (&context);
+  status = create_server_socket (&context);
   close (context.file_fd);
 
   return (status);

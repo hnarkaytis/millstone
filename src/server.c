@@ -1,7 +1,6 @@
 #include <millstone.h>
 #include <logging.h>
 #include <block.h>
-#include <close_connection.h>
 #include <file_meta.h>
 #include <server.h>
 
@@ -71,10 +70,13 @@ handle_client (void * arg)
   status_t status = read_file_meta (&connection, &file_exists);
   
   if (ST_SUCCESS == status)
-    start_data_socket (&connection);
-
-  close (context.file_fd);
-  close_connection (accepter_ctx.fd);
+    {
+      start_data_socket (&connection);
+      close (context.file_fd);
+    }
+  
+  shutdown (accepter_ctx.fd, SD_BOTH);
+  close (accepter_ctx.fd);
   
   return (NULL);
 }
@@ -129,7 +131,8 @@ run_accepter (config_t * config, int sock)
       if (rv != 0)
 	{
 	  ERROR_MSG ("Failed to create thread for new client.");
-	  close_connection (accepter_ctx.fd);
+	  shutdown (accepter_ctx.fd, SD_BOTH);
+	  close (accepter_ctx.fd);
 	  continue;
 	}
       pthread_mutex_lock (&accepter_ctx.mutex);

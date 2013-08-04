@@ -12,6 +12,10 @@
 
 #define DEFAULT_LISTEN_PORT (31415)
 
+#ifndef SD_BOTH
+#define SD_BOTH (2)
+#endif /* SD_BOTH */
+
 TYPEDEF_ENUM (status_t, ST_SUCCESS, ST_FAILURE)
 
 TYPEDEF_ENUM (run_mode_t, RM_SERVER, RM_CLIENT)

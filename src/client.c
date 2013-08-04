@@ -37,7 +37,11 @@ reader (client_t * client)
       if (ST_SUCCESS != status)
 	break;
       if (MT_TERMINATE == msg.msg_type)
-	break;
+	{
+	  INFO_MSG ("Got termination command.");
+	  break;
+	}
+      
       switch (msg.msg_type)
 	{
 	case MT_BLOCK_DIGEST:
@@ -47,6 +51,7 @@ reader (client_t * client)
 	  queue_push (&client->data_in.queue, &msg);
 	  break;
 	default:
+	  ERROR_MSG ("Unexpected message type %d.", msg.msg_type);
 	  status = ST_FAILURE;
 	  break;
 	}

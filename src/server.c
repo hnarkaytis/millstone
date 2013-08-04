@@ -84,6 +84,7 @@ server_worker (void * arg)
 static status_t
 server_cmd_writer (server_t * server)
 {
+  
   return (ST_SUCCESS);
 }
 
@@ -132,12 +133,20 @@ start_data_reader (server_t * server)
 }
 
 static status_t
-client_main_loop (connection_t * connection)
+init_server (connection_t * connection)
 {
   server_t server = { .connection = connection, };
   msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
-
+  task_t task_array_data[MSG_OUT_QUEUE_SIZE + MSG_IN_QUEUE_SIZE];
+  
   status_t status = MSG_QUEUE_INIT (&server.cmd_out, cmd_out_array_data);
+  if (ST_SUCCESS != status)
+    return (status);
+
+  server.task_queue.array.data = task_array_data;
+  server.task_queue.array.size = sizeof (task_array_data);
+  server.task_queue.array.alloc_size = -1;
+  status = queue_init (&server.task_queue.queue, (mr_rarray_t*)&server.task_queue.array, sizeof (server.task_queue.array.data[0]));
   if (ST_SUCCESS != status)
     return (status);
 
@@ -168,7 +177,7 @@ start_data_socket (connection_t * connection)
       return (ST_FAILURE);
     }
 
-  status = client_main_loop (connection);
+  status = init_server (connection);
   close (connection->data_fd);
   
   return (status);

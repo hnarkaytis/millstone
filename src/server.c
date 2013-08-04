@@ -84,8 +84,23 @@ server_worker (void * arg)
 static status_t
 server_cmd_writer (server_t * server)
 {
-  
-  return (ST_SUCCESS);
+  status_t status;
+  msg_t msg;
+
+  memset (&msg, 0, sizeof (msg));
+  for (;;)
+    {
+      queue_pop (&server->cmd_out.queue, &msg);
+      status = msg_send (server->connection->cmd_fd, &msg);
+      if (status != ST_SUCCESS)
+	break;
+      if (MT_TERMINATE == msg.msg_type)
+	{
+	  INFO_MSG ("Terminating connection with client.");
+	  break;
+	}
+    }  
+  return (status);
 }
 
 static status_t
@@ -115,17 +130,42 @@ start_workers (server_t * server)
 }
 
 static status_t
+retrive_file (server_t * server)
+{
+  msg_t msg;
+  off64_t offset;
+  status_t status = ST_SUCCESS;
+  
+  memset (&msg, 0, sizeof (msg));
+  msg.msg_type = MT_BLOCK_REQUEST;
+  msg.msg_data.block_id.size = MIN_BLOCK_SIZE;
+  for (offset = 0; offset < server->connection->context->size; offset += msg.msg_data.block_id.size)
+    {
+      if (msg.msg_data.block_id.size > server->connection->context->size - offset)
+	msg.msg_data.block_id.size = server->connection->context->size - offset;
+      status = msg_send (server->connection->cmd_fd, &msg);
+      if (status != ST_SUCCESS)
+	break;
+    }
+  return (status);
+}
+
+static status_t
 start_data_reader (server_t * server)
 {
   pthread_t id;
+  status_t status;
   int rv = pthread_create (&id, NULL, server_data_reader, &server);
   if (rv != 0)
     {
       ERROR_MSG ("Failed to start data reader thread.");
       return (ST_FAILURE);
     }
-  
-  status_t status = start_workers (server);
+
+  if (server->connection->context->file_exists)
+    status = start_workers (server);
+  else
+    status = retrive_file (server);
 
   pthread_cancel (id);
   pthread_join (id, NULL);

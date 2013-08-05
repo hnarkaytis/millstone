@@ -55,22 +55,51 @@ cmp_keys (const long x, const long y, const void * null)
   return ((x > y) - (y > x));
 }
 
+static long
+get_key (off64_t offset)
+{
+  return (offset / MIN_BLOCK_SIZE);
+}
+
 static status_t
 reg_add_request (sync_rb_tree_t reg[], off64_t offset)
 {
   status_t status = ST_SUCCESS;
-  long key = offset / MIN_BLOCK_SIZE;
+  long key = get_key (offset);
   int hash_table_size = sizeof (((server_t*)NULL)->reg) / sizeof (reg[0]);
   sync_rb_tree_t * bucket = &reg[key % hash_table_size];
   pthread_mutex_lock (&bucket->mutex);
-  void * new_node = mr_tsearch (key, &bucket->tree, cmp_keys, NULL);
-  if (NULL == new_node)
+  void * find = mr_tsearch (key, &bucket->tree, cmp_keys, NULL);
+  if (NULL == find)
     {
       FATAL_MSG ("Out of memory.");
       status = ST_FAILURE;
     }
   pthread_mutex_unlock (&bucket->mutex);
   return (status);
+}
+
+static void
+reg_del_request (sync_rb_tree_t reg[], off64_t offset)
+{
+  long key = get_key (offset);
+  int hash_table_size = sizeof (((server_t*)NULL)->reg) / sizeof (reg[0]);
+  sync_rb_tree_t * bucket = &reg[key % hash_table_size];
+  pthread_mutex_lock (&bucket->mutex);
+  mr_tdelete (key, &bucket->tree, cmp_keys, NULL);
+  pthread_mutex_unlock (&bucket->mutex);
+}
+
+static bool
+reg_check_request (sync_rb_tree_t reg[], off64_t offset)
+{
+  long key = get_key (offset);
+  int hash_table_size = sizeof (((server_t*)NULL)->reg) / sizeof (reg[0]);
+  sync_rb_tree_t * bucket = &reg[key % hash_table_size];
+  pthread_mutex_lock (&bucket->mutex);
+  void * find = mr_tfind (key, &bucket->tree, cmp_keys, NULL);
+  pthread_mutex_unlock (&bucket->mutex);
+  return (find != NULL);
 }
 
 static status_t
@@ -99,6 +128,19 @@ block_matched (server_t * server, block_matched_t * block_matched)
   return (status);
 }
 
+static status_t
+block_sent (server_t * server, block_id_t * block_id)
+{
+  if (reg_check_request (server->reg, block_id->offset))
+    {
+      msg_t msg;
+      msg.msg_type = MT_BLOCK_REQUEST;
+      msg.msg_data.block_id = *block_id;
+      queue_push (&server->cmd_out.queue, &msg);
+    }
+  return (ST_SUCCESS);
+}
+
 static void *
 server_cmd_reader (void * arg)
 {
@@ -116,8 +158,12 @@ server_cmd_reader (void * arg)
 	  status = block_matched (server, &msg.msg_data.block_matched);
 	  break;
 	case MT_BLOCK_SENT:
+	  status = block_sent (server, &msg.msg_data.block_id);
 	  break;
 	case MT_BLOCK_SEND_ERROR:
+	  ERROR_MSG ("Client failed to send data block (offset %lld size %lld).",
+		     msg.msg_data.block_id.offset, msg.msg_data.block_id.size);
+	  reg_del_request (server->reg, msg.msg_data.block_id.offset);
 	  break;
 	default:
 	  status = ST_FAILURE;
@@ -133,6 +179,16 @@ server_cmd_reader (void * arg)
 static void *
 server_data_reader (void * arg)
 {
+  server_t * server = arg;
+  unsigned char buf[1 << 16];
+  struct sockaddr_in addr;
+  socklen_t addr_len;
+  for (;;)
+    {
+      int rv = recvfrom (server->connection->data_fd, buf, sizeof (buf), 0, (struct sockaddr*)&addr, &addr_len);
+      if (rv <= 0)
+	ERROR_MSG ("Failed to recieve UDP packet.");
+    }
   return (NULL);
 }
 

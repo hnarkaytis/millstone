@@ -27,10 +27,19 @@ TYPEDEF_STRUCT (task_queue_t,
 		RARRAY (task_t, array),
 		)
 
+TYPEDEF_STRUCT (sync_rb_tree_t,
+		(mr_red_black_tree_node_t *, tree),
+		(pthread_mutex_t, mutex),
+		)
+
+#define HASH_TABLE_SIZE (127)
+
 TYPEDEF_STRUCT (server_t,
 		(connection_t *, connection),
 		(msg_queue_t, cmd_out),
 		(task_queue_t, task_queue),
+		(sync_rb_tree_t, reg, [HASH_TABLE_SIZE]),
+		(char*, key_type),
 		)
 
 TYPEDEF_STRUCT (accepter_ctx_t,
@@ -40,11 +49,37 @@ TYPEDEF_STRUCT (accepter_ctx_t,
 		(pthread_mutex_t, mutex),
 		)
 
-static void
+static int
+cmp_keys (const long x, const long y, const void * null)
+{
+  return ((x > y) - (y > x));
+}
+
+static status_t
+reg_add_request (sync_rb_tree_t reg[], off64_t offset)
+{
+  status_t status = ST_SUCCESS;
+  long key = offset / MIN_BLOCK_SIZE;
+  int hash_table_size = sizeof (((server_t*)NULL)->reg) / sizeof (reg[0]);
+  sync_rb_tree_t * bucket = &reg[key % hash_table_size];
+  pthread_mutex_lock (&bucket->mutex);
+  void * new_node = mr_tsearch (key, &bucket->tree, cmp_keys, NULL);
+  if (NULL == new_node)
+    {
+      FATAL_MSG ("Out of memory.");
+      status = ST_FAILURE;
+    }
+  pthread_mutex_unlock (&bucket->mutex);
+  return (status);
+}
+
+static status_t
 block_matched (server_t * server, block_matched_t * block_matched)
 {
+  status_t status = ST_SUCCESS;
   if (block_matched->matched)
-    return;
+    return (status);
+  
   if (block_matched->block_id.size > MIN_BLOCK_SIZE)
     {
       task_t task;
@@ -57,8 +92,11 @@ block_matched (server_t * server, block_matched_t * block_matched)
       msg_t msg;
       msg.msg_type = MT_BLOCK_REQUEST;
       msg.msg_data.block_id = block_matched->block_id;
-      queue_push (&server->cmd_out.queue, &msg);
+      status = reg_add_request (server->reg, msg.msg_data.block_id.offset);
+      if (ST_SUCCESS == status)
+	queue_push (&server->cmd_out.queue, &msg);
     }
+  return (status);
 }
 
 static void *
@@ -75,7 +113,7 @@ server_cmd_reader (void * arg)
       switch (msg.msg_type)
 	{
 	case MT_BLOCK_MATCHED:
-	  block_matched (server, &msg.msg_data.block_matched);
+	  status = block_matched (server, &msg.msg_data.block_matched);
 	  break;
 	case MT_BLOCK_SENT:
 	  break;
@@ -227,13 +265,10 @@ start_data_reader (server_t * server)
 
   if (server->connection->context->file_exists)
     {
-      task_t task = {
-	.block_id = {
-	  .offset = 0,
-	  .size = server->connection->context->size,
-	},
-	.size = MAX_BLOCK_SIZE,
-      };
+      task_t task;
+      task.block_id.offset = 0;
+      task.block_id.size = server->connection->context->size;
+      task.size = MAX_BLOCK_SIZE,
       queue_push (&server->task_queue.queue, &task);
       status = start_workers (server);
     }
@@ -245,12 +280,27 @@ start_data_reader (server_t * server)
   return (status);
 }
 
+static void
+reg_init (sync_rb_tree_t reg[])
+{
+  int i;
+  int size = sizeof (((server_t*)NULL)->reg);
+  memset (reg, 0, size);
+  for (i = 0; i < size / sizeof (reg[0]); ++i)
+    {
+      reg[i].tree = NULL;
+      pthread_mutex_init (&reg[i].mutex, NULL);
+    }
+}
+
 static status_t
-init_server (connection_t * connection)
+server_init (connection_t * connection)
 {
   server_t server = { .connection = connection, };
   msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
   task_t task_array_data[MSG_OUT_QUEUE_SIZE + MSG_IN_QUEUE_SIZE];
+
+  reg_init (server.reg);
   
   status_t status = MSG_QUEUE_INIT (&server.cmd_out, cmd_out_array_data);
   if (ST_SUCCESS != status)
@@ -290,7 +340,7 @@ start_data_socket (connection_t * connection)
       return (ST_FAILURE);
     }
 
-  status = init_server (connection);
+  status = server_init (connection);
   close (connection->data_fd);
   
   return (status);

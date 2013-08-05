@@ -40,9 +40,55 @@ TYPEDEF_STRUCT (accepter_ctx_t,
 		(pthread_mutex_t, mutex),
 		)
 
+static void
+block_matched (server_t * server, block_matched_t * block_matched)
+{
+  if (block_matched->matched)
+    return;
+  if (block_matched->block_id.size > MIN_BLOCK_SIZE)
+    {
+      task_t task;
+      task.block_id = block_matched->block_id;
+      task.size = block_matched->block_id.size / SPLIT_RATIO;
+      queue_push (&server->task_queue.queue, &task);
+    }
+  else
+    {
+      msg_t msg;
+      msg.msg_type = MT_BLOCK_REQUEST;
+      msg.msg_data.block_id = block_matched->block_id;
+      queue_push (&server->cmd_out.queue, &msg);
+    }
+}
+
 static void *
 server_cmd_reader (void * arg)
 {
+  server_t * server = arg;
+
+  for (;;)
+    {
+      msg_t msg;
+      status_t status = msg_recv (server->connection->cmd_fd, &msg);
+      if (ST_SUCCESS != status)
+	break;
+      switch (msg.msg_type)
+	{
+	case MT_BLOCK_MATCHED:
+	  block_matched (server, &msg.msg_data.block_matched);
+	  break;
+	case MT_BLOCK_SENT:
+	  break;
+	case MT_BLOCK_SEND_ERROR:
+	  break;
+	default:
+	  status = ST_FAILURE;
+	  break;
+	}
+      if (ST_SUCCESS != status)
+	break;
+    }
+  shutdown (server->connection->cmd_fd, SD_BOTH);
   return (NULL);
 }
 
@@ -180,7 +226,17 @@ start_data_reader (server_t * server)
     }
 
   if (server->connection->context->file_exists)
-    status = start_workers (server);
+    {
+      task_t task = {
+	.block_id = {
+	  .offset = 0,
+	  .size = server->connection->context->size,
+	},
+	.size = MAX_BLOCK_SIZE,
+      };
+      queue_push (&server->task_queue.queue, &task);
+      status = start_workers (server);
+    }
   else
     status = start_data_retrieval (server);
 

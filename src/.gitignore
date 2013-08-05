@@ -1,6 +1,7 @@
 /.deps
 /Makefile
 /Makefile.in
+/TAGS
 /calc_digest.o
 /client.o
 /file_meta.o

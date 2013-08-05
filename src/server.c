@@ -67,10 +67,10 @@ server_worker (void * arg)
   
       msg.msg_type = MT_BLOCK_DIGEST;
       msg.msg_data.block_id.size = task.size;
-      for (offset = 0; offset < task.block_id.size; offset += task.size)
+      for (offset = 0; offset < task.block_id.size; offset += msg.msg_data.block_id.size)
 	{
 	  msg.msg_data.block_id.offset = task.block_id.offset + offset;
-	  if (offset + task.size > task.block_id.size)
+	  if (msg.msg_data.block_id.size > task.block_id.size - offset)
 	    msg.msg_data.block_id.size = task.block_id.size - offset;
 	  status_t status = calc_digest (&msg.msg_data.block_digest, server->connection->context->file_fd);
 	  if (ST_SUCCESS != status)

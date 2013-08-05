@@ -46,7 +46,7 @@ read_file_meta (connection_t * connection)
       rv = access (dst_file, R_OK | W_OK);
       if (rv != 0)
 	{
-	  ERROR_MSG ("File (%s) access writes are not 'rw'.", dst_file);
+	  ERROR_MSG ("File (%s) access rights are not 'rw'.", dst_file);
 	  return (ST_FAILURE);
 	}
     }

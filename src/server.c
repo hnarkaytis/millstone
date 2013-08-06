@@ -5,6 +5,7 @@
 #include <queue.h>
 #include <msg.h>
 #include <calc_digest.h>
+#include <sync_storage.h>
 #include <server.h>
 
 #include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close, ftruncate64 */
@@ -12,6 +13,8 @@
 #include <sys/user.h> /* PAGE_SIZE */
 
 #include <pthread.h>
+
+#define DATA_READERS (4)
 
 #define SPLIT_RATIO (128)
 #define MIN_BLOCK_SIZE (PAGE_SIZE)
@@ -27,79 +30,46 @@ TYPEDEF_STRUCT (task_queue_t,
 		RARRAY (task_t, array),
 		)
 
-TYPEDEF_STRUCT (sync_rb_tree_t,
-		(mr_red_black_tree_node_t *, tree),
-		(pthread_mutex_t, mutex),
+TYPEDEF_STRUCT (server_ctx_t,
+		(config_t *, config),
+		int server_sock,
+		int data_sock,
+		(sync_storage_t, clients),
+		(struct sockaddr_in, name),
 		)
-
-#define HASH_TABLE_SIZE (127)
 
 TYPEDEF_STRUCT (server_t,
 		(connection_t *, connection),
 		(msg_queue_t, cmd_out),
 		(task_queue_t, task_queue),
-		(sync_rb_tree_t, reg, [HASH_TABLE_SIZE]),
-		(char*, key_type),
+		(sync_storage_t, data_blocks),
+		(server_ctx_t *, server_ctx)
 		)
 
 TYPEDEF_STRUCT (accepter_ctx_t,
-		(config_t *, config),
-		(struct sockaddr_in, clientname),
+		(server_ctx_t *, server_ctx),
+		(struct sockaddr_in, client_name),
+		(socklen_t, client_addr_size),
 		int fd,
 		(pthread_mutex_t, mutex),
 		)
 
 static int
-cmp_keys (const long x, const long y, const void * null)
+offset_key_compar (const long x, const long y, const void * null)
 {
   return ((x > y) - (y > x));
 }
 
+static mr_hash_value_t
+offset_key_hash (const long x, const void * null)
+{
+  return (x);
+}
+
 static long
-get_key (off64_t offset)
+offset_key (off64_t offset)
 {
   return (offset / MIN_BLOCK_SIZE);
-}
-
-static status_t
-reg_add_request (sync_rb_tree_t reg[], off64_t offset)
-{
-  status_t status = ST_SUCCESS;
-  long key = get_key (offset);
-  int hash_table_size = sizeof (((server_t*)NULL)->reg) / sizeof (reg[0]);
-  sync_rb_tree_t * bucket = &reg[key % hash_table_size];
-  pthread_mutex_lock (&bucket->mutex);
-  void * find = mr_tsearch (key, &bucket->tree, cmp_keys, NULL);
-  if (NULL == find)
-    {
-      FATAL_MSG ("Out of memory.");
-      status = ST_FAILURE;
-    }
-  pthread_mutex_unlock (&bucket->mutex);
-  return (status);
-}
-
-static void
-reg_del_request (sync_rb_tree_t reg[], off64_t offset)
-{
-  long key = get_key (offset);
-  int hash_table_size = sizeof (((server_t*)NULL)->reg) / sizeof (reg[0]);
-  sync_rb_tree_t * bucket = &reg[key % hash_table_size];
-  pthread_mutex_lock (&bucket->mutex);
-  mr_tdelete (key, &bucket->tree, cmp_keys, NULL);
-  pthread_mutex_unlock (&bucket->mutex);
-}
-
-static bool
-reg_check_request (sync_rb_tree_t reg[], off64_t offset)
-{
-  long key = get_key (offset);
-  int hash_table_size = sizeof (((server_t*)NULL)->reg) / sizeof (reg[0]);
-  sync_rb_tree_t * bucket = &reg[key % hash_table_size];
-  pthread_mutex_lock (&bucket->mutex);
-  void * find = mr_tfind (key, &bucket->tree, cmp_keys, NULL);
-  pthread_mutex_unlock (&bucket->mutex);
-  return (find != NULL);
 }
 
 static status_t
@@ -121,7 +91,7 @@ block_matched (server_t * server, block_matched_t * block_matched)
       msg_t msg;
       msg.msg_type = MT_BLOCK_REQUEST;
       msg.msg_data.block_id = block_matched->block_id;
-      status = reg_add_request (server->reg, msg.msg_data.block_id.offset);
+      status = sync_storage_add (&server->data_blocks, offset_key (msg.msg_data.block_id.offset));
       if (ST_SUCCESS == status)
 	queue_push (&server->cmd_out.queue, &msg);
     }
@@ -131,7 +101,7 @@ block_matched (server_t * server, block_matched_t * block_matched)
 static status_t
 block_sent (server_t * server, block_id_t * block_id)
 {
-  if (reg_check_request (server->reg, block_id->offset))
+  if (NULL != sync_storage_find (&server->data_blocks, offset_key (block_id->offset)))
     {
       msg_t msg;
       msg.msg_type = MT_BLOCK_REQUEST;
@@ -163,7 +133,7 @@ server_cmd_reader (void * arg)
 	case MT_BLOCK_SEND_ERROR:
 	  ERROR_MSG ("Client failed to send data block (offset %lld size %lld).",
 		     msg.msg_data.block_id.offset, msg.msg_data.block_id.size);
-	  reg_del_request (server->reg, msg.msg_data.block_id.offset);
+	  sync_storage_del (&server->data_blocks, offset_key (msg.msg_data.block_id.offset));
 	  break;
 	default:
 	  status = ST_FAILURE;
@@ -173,22 +143,6 @@ server_cmd_reader (void * arg)
 	break;
     }
   shutdown (server->connection->cmd_fd, SD_BOTH);
-  return (NULL);
-}
-
-static void *
-server_data_reader (void * arg)
-{
-  server_t * server = arg;
-  unsigned char buf[1 << 16];
-  struct sockaddr_in addr;
-  socklen_t addr_len;
-  for (;;)
-    {
-      int rv = recvfrom (server->connection->data_fd, buf, sizeof (buf), 0, (struct sockaddr*)&addr, &addr_len);
-      if (rv <= 0)
-	ERROR_MSG ("Failed to recieve UDP packet.");
-    }
   return (NULL);
 }
 
@@ -308,18 +262,20 @@ start_data_retrieval (server_t * server)
 }
 
 static status_t
-start_data_reader (server_t * server)
+start_cmd_reader (server_t * server)
 {
   pthread_t id;
-  status_t status;
-  int rv = pthread_create (&id, NULL, server_data_reader, &server);
+  int rv = pthread_create (&id, NULL, server_cmd_reader, &server);
   if (rv != 0)
     {
-      ERROR_MSG ("Failed to start data reader thread.");
+      ERROR_MSG ("Failed to start command reader thread.");
       return (ST_FAILURE);
     }
 
-  if (server->connection->context->file_exists)
+  status_t status;
+  if (!server->connection->context->file_exists)
+    status = start_data_retrieval (server);
+  else
     {
       task_t task;
       task.block_id.offset = 0;
@@ -328,76 +284,9 @@ start_data_reader (server_t * server)
       queue_push (&server->task_queue.queue, &task);
       status = start_workers (server);
     }
-  else
-    status = start_data_retrieval (server);
 
   pthread_cancel (id);
   pthread_join (id, NULL);
-  return (status);
-}
-
-static void
-reg_init (sync_rb_tree_t reg[])
-{
-  int i;
-  int size = sizeof (((server_t*)NULL)->reg);
-  memset (reg, 0, size);
-  for (i = 0; i < size / sizeof (reg[0]); ++i)
-    {
-      reg[i].tree = NULL;
-      pthread_mutex_init (&reg[i].mutex, NULL);
-    }
-}
-
-static status_t
-server_init (connection_t * connection)
-{
-  server_t server = { .connection = connection, };
-  msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
-  task_t task_array_data[MSG_OUT_QUEUE_SIZE + MSG_IN_QUEUE_SIZE];
-
-  reg_init (server.reg);
-  
-  status_t status = MSG_QUEUE_INIT (&server.cmd_out, cmd_out_array_data);
-  if (ST_SUCCESS != status)
-    return (status);
-
-  server.task_queue.array.data = task_array_data;
-  server.task_queue.array.size = sizeof (task_array_data);
-  server.task_queue.array.alloc_size = -1;
-  status = queue_init (&server.task_queue.queue, (mr_rarray_t*)&server.task_queue.array, sizeof (server.task_queue.array.data[0]));
-  if (ST_SUCCESS != status)
-    return (status);
-
-  pthread_t id;
-  int rv = pthread_create (&id, NULL, server_cmd_reader, &server);
-  if (rv != 0)
-    {
-      ERROR_MSG ("Failed to start command reader thread.");
-      return (ST_FAILURE);
-    }
-  
-  status = start_data_reader (&server);
-
-  pthread_cancel (id);
-  pthread_join (id, NULL);
-  
-  return (status);
-}
-
-static status_t
-start_data_socket (connection_t * connection)
-{
-  status_t status;
-  connection->data_fd = socket (PF_INET, SOCK_DGRAM, 0);
-  if (connection->data_fd < 0)
-    {
-      ERROR_MSG ("socket failed errno(%d) '%s'.", errno, strerror (errno));
-      return (ST_FAILURE);
-    }
-
-  status = server_init (connection);
-  close (connection->data_fd);
   
   return (status);
 }
@@ -409,17 +298,37 @@ handle_client (void * arg)
   accepter_ctx_t accepter_ctx = *ctx;
   pthread_mutex_unlock (&ctx->mutex);
 
-  context_t context = { .config = accepter_ctx.config, };
-  connection_t connection = {
-    .context = &context,
-    .cmd_fd = accepter_ctx.fd,
-    .name = accepter_ctx.clientname,
-  };
+  context_t context;
+  memset (&context, 0, sizeof (context));
+  context.config = accepter_ctx.server_ctx->config;
+
+  connection_t connection;
+  memset (&connection, 0, sizeof (connection));
+  connection.context = &context;
+  connection.cmd_fd = accepter_ctx.fd;
+  connection.name = accepter_ctx.client_name;
+
+  server_t server;
+  memset (&server, 0, sizeof (server));
+  server.connection = &connection;
+  server.server_ctx = accepter_ctx.server_ctx;
+  
+  sync_storage_init (&server.data_blocks, offset_key_compar, offset_key_hash, "long_int_t", NULL);
+  
+  msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
+  MSG_QUEUE_INIT (&server.cmd_out, cmd_out_array_data);
+
+  task_t task_array_data[MSG_OUT_QUEUE_SIZE + MSG_IN_QUEUE_SIZE];
+  server.task_queue.array.data = task_array_data;
+  server.task_queue.array.size = sizeof (task_array_data);
+  server.task_queue.array.alloc_size = -1;
+  queue_init (&server.task_queue.queue, (mr_rarray_t*)&server.task_queue.array, sizeof (server.task_queue.array.data[0]));
+
   status_t status = read_file_meta (&connection);
   
   if (ST_SUCCESS == status)
     {
-      start_data_socket (&connection);
+      status = start_cmd_reader (&server);
       close (context.file_fd);
     }
   
@@ -430,28 +339,23 @@ handle_client (void * arg)
 }
 
 static status_t
-run_accepter (config_t * config, int sock)
+run_accepter (server_ctx_t * server_ctx)
 {
-  struct sockaddr_in name;
   int reuse_addr = !0;
   struct linger linger_opt = { .l_onoff = 1, .l_linger = 1, };
 
-  setsockopt (sock, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof (reuse_addr));
-  setsockopt (sock, SOL_SOCKET, SO_LINGER, &linger_opt, sizeof (linger_opt));
+  setsockopt (server_ctx->server_sock, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof (reuse_addr));
+  setsockopt (server_ctx->server_sock, SOL_SOCKET, SO_LINGER, &linger_opt, sizeof (linger_opt));
 
-  name.sin_family = AF_INET;
-  name.sin_port = htons (config->listen_port);
-  name.sin_addr.s_addr = htonl (INADDR_ANY);
-
-  int status = bind (sock, (struct sockaddr *) &name, sizeof (name));
-  if (status < 0)
+  int rv = bind (server_ctx->server_sock, (struct sockaddr *)&server_ctx->name, sizeof (server_ctx->name));
+  if (rv < 0)
     {
       ERROR_MSG ("bind failed errno(%d) '%s'.", errno, strerror (errno));
       return (ST_FAILURE);
     }
 
-  status = listen (sock, 1);
-  if (status < 0)
+  rv = listen (server_ctx->server_sock, 1);
+  if (rv < 0)
     {
       ERROR_MSG ("listen failed errno(%d) '%s'.", errno, strerror (errno));
       return (ST_FAILURE);
@@ -459,10 +363,13 @@ run_accepter (config_t * config, int sock)
 
   for (;;)
     {
-      accepter_ctx_t accepter_ctx = { .mutex = PTHREAD_MUTEX_INITIALIZER, };
-      socklen_t size = sizeof (accepter_ctx.clientname);
+      accepter_ctx_t accepter_ctx = { .mutex = PTHREAD_MUTEX_INITIALIZER, .server_ctx = server_ctx, };
 
-      accepter_ctx.fd = TEMP_FAILURE_RETRY (accept (sock, (struct sockaddr*)&accepter_ctx.clientname, &size));
+      accepter_ctx.fd = TEMP_FAILURE_RETRY
+	(accept (server_ctx->server_sock,
+		 (struct sockaddr*)&accepter_ctx.client_name,
+		 &accepter_ctx.client_addr_size));
+      
       if (accepter_ctx.fd < 0)
 	{
 	  ERROR_MSG ("accept failed errno(%d) '%s'.", errno, strerror (errno));
@@ -475,7 +382,7 @@ run_accepter (config_t * config, int sock)
       pthread_attr_setdetachstate (&attr, PTHREAD_CREATE_DETACHED);
       
       pthread_mutex_lock (&accepter_ctx.mutex);
-      int rv = pthread_create (&id, &attr, handle_client, &accepter_ctx);
+      rv = pthread_create (&id, &attr, handle_client, &accepter_ctx);
       if (rv != 0)
 	{
 	  ERROR_MSG ("Failed to create thread for new client.");
@@ -489,19 +396,145 @@ run_accepter (config_t * config, int sock)
   return (ST_SUCCESS);
 }
 
-status_t
-run_server (config_t * config)
+static status_t
+create_server_socket (server_ctx_t * server_ctx)
 {
   status_t status;
-  int sock = socket (PF_INET, SOCK_STREAM, 0);
-  if (sock < 0)
+  server_ctx->server_sock = socket (PF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (server_ctx->server_sock < 0)
     {
       ERROR_MSG ("socket failed errno(%d) '%s'.", errno, strerror (errno));
       return (ST_FAILURE);
     }
 
-  status = run_accepter (config, sock);
-  close (sock);
+  status = run_accepter (server_ctx);
+  
+  close (server_ctx->server_sock);
+  
+  return (status);
+}
+
+static status_t
+put_data_block (server_t * server, unsigned char * buf, int size)
+{
+  return (ST_SUCCESS);
+}
+
+static int
+addr_compar (const mr_ptr_t x, const mr_ptr_t y, const void * null)
+{
+  server_t * server_x = x.ptr;
+  server_t * server_y = y.ptr;
+  int cmp = (server_x->connection->name.sin_addr.s_addr > server_y->connection->name.sin_addr.s_addr) -
+    (server_x->connection->name.sin_addr.s_addr < server_y->connection->name.sin_addr.s_addr);
+  if (cmp)
+    return (cmp);
+  cmp = (server_x->connection->name.sin_port > server_y->connection->name.sin_port) -
+    (server_x->connection->name.sin_port < server_y->connection->name.sin_port);
+  return (cmp);
+}
+
+static mr_hash_value_t
+addr_hash (const mr_ptr_t key, const void * context)
+{
+  server_t * server = key.ptr;
+  return (server->connection->name.sin_addr.s_addr +
+	  0xDeadBeef * server->connection->name.sin_port);
+}
+
+static void *
+server_data_reader (void * arg)
+{
+  server_ctx_t * server_ctx = arg;
+  unsigned char buf[1 << 16];
+  
+  for (;;)
+    {
+      struct sockaddr addr;
+      struct sockaddr_in addr_in;
+      socklen_t addr_len;
+      int rv = recvfrom (server_ctx->data_sock, buf, sizeof (buf), 0, &addr, &addr_len);
+      if (rv <= 0)
+	{
+	  ERROR_MSG ("Failed to recieve UDP packet.");
+	  continue;
+	}
+      if (addr_len != sizeof (addr_in))
+	{
+	  ERROR_MSG ("Got UDP packet from unknown type of address.");
+	  continue;
+	}
+      memcpy (&addr_in, &addr, sizeof (addr_in));
+      mr_ptr_t * find = sync_storage_find (&server_ctx->clients, &addr_in);
+      if (NULL == find)
+	{
+	  ERROR_MSG ("Unknown client.");
+	  continue;
+	}
+      server_t * server = find->ptr;
+      put_data_block (server, buf, rv);
+    }
+  return (NULL);
+}
+
+static status_t
+start_data_readers (server_ctx_t * server_ctx)
+{
+  int i;
+  pthread_t ids[DATA_READERS];
+  status_t status = ST_FAILURE;
+
+  for (i = 0; i < DATA_READERS; ++i)
+    {
+      int rv = pthread_create (&ids[i], NULL, server_data_reader, server_ctx);
+      if (rv != 0)
+	break;
+    }
+
+  if (i > 0)
+    status = create_server_socket (server_ctx);
+
+  for ( ; i >= 0; --i)
+    {
+      pthread_cancel (ids[i]);
+      pthread_join (ids[i], NULL);
+    }
+  
+  return (status);
+}
+
+status_t
+run_server (config_t * config)
+{
+  server_ctx_t server_ctx;
+
+  memset (&server_ctx, 0, sizeof (server_ctx));
+  server_ctx.config = config;
+  
+  server_ctx.name.sin_family = AF_INET;
+  server_ctx.name.sin_port = htons (config->listen_port);
+  server_ctx.name.sin_addr.s_addr = htonl (INADDR_ANY);
+
+  sync_storage_init (&server_ctx.clients, addr_compar, addr_hash, "server_t", NULL);
+  
+  server_ctx.data_sock = socket (PF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (server_ctx.data_sock < 0)
+    {
+      ERROR_MSG ("socket failed errno(%d) '%s'.", errno, strerror (errno));
+      return (ST_FAILURE);
+    }
+
+  status_t status;
+  int rv = bind (server_ctx.data_sock, (struct sockaddr *)&server_ctx.name, sizeof (server_ctx.name));
+  if (0 == rv)
+    status = start_data_readers (&server_ctx);
+  else
+    {
+      ERROR_MSG ("bind failed errno(%d) '%s'.", errno, strerror (errno));
+      status = ST_FAILURE;
+    }
+  
+  close (server_ctx.data_sock);
   
   return (status);
 }

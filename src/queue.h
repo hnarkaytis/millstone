@@ -20,7 +20,7 @@ TYPEDEF_STRUCT (queue_t,
 		(pthread_cond_t, empty),
 		)
 
-extern status_t queue_init (queue_t * queue, mr_rarray_t * array, size_t elem_size);
+extern void queue_init (queue_t * queue, mr_rarray_t * array, size_t elem_size);
 extern void queue_push (queue_t * queue, void * element);
 extern void queue_pop (queue_t * queue, void * element);
 

@@ -11,3 +11,4 @@
 /msg.o
 /queue.o
 /server.o
+/sync_storage.o

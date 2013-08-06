@@ -9,24 +9,9 @@
 #include <logging.h>
 #include <queue.h>
 
-status_t
+void
 queue_init (queue_t * queue, mr_rarray_t * array, size_t elem_size)
 {
-  if (elem_size <= 0)
-    {
-      ERROR_MSG ("Illegal element size %zd", elem_size);
-      return (ST_FAILURE);
-    }
-  if (NULL == array)
-    {
-      ERROR_MSG ("Array for queue is NULL");
-      return (ST_FAILURE);
-    }
-  if ((NULL == array->data) || (array->size <= 0))
-    {
-      ERROR_MSG ("Illegal rarray for queue");
-      return (ST_FAILURE);
-    }
   queue->array = array;
   queue->head = 0;
   queue->tail = 0;
@@ -36,7 +21,6 @@ queue_init (queue_t * queue, mr_rarray_t * array, size_t elem_size)
   pthread_mutex_init (&queue->mutex, NULL);
   pthread_cond_init (&queue->full, NULL);
   pthread_cond_init (&queue->empty, NULL);
-  return (ST_SUCCESS);
 }
 
 void

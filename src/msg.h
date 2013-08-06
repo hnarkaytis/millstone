@@ -37,7 +37,7 @@ TYPEDEF_STRUCT (msg_queue_t,
 		RARRAY (msg_t, array),
 		)
 
-extern status_t msg_queue_init (msg_queue_t * msg_queue, msg_t * array, size_t size);
+extern void msg_queue_init (msg_queue_t * msg_queue, msg_t * array, size_t size);
 extern status_t msg_send (int fd, msg_t * msg);
 extern status_t msg_recv (int fd, msg_t * msg);
 

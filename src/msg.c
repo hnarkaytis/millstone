@@ -35,12 +35,11 @@ msg_send (int fd, msg_t * msg)
   return (status);
 }
 
-status_t
+void
 msg_queue_init (msg_queue_t * msg_queue, msg_t * array, size_t size)
 {
   msg_queue->array.data = array;
   msg_queue->array.size = size;
   msg_queue->array.alloc_size = -1;
-  status_t status = queue_init (&msg_queue->queue, (mr_rarray_t*)&msg_queue->array, sizeof (msg_queue->array.data[0]));
-  return (status);
+  queue_init (&msg_queue->queue, (mr_rarray_t*)&msg_queue->array, sizeof (msg_queue->array.data[0]));
 }

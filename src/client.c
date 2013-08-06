@@ -237,15 +237,9 @@ run_session (connection_t * connection)
   if (ST_SUCCESS != status)
     return (status);
   
-  status = MSG_QUEUE_INIT (&client.cmd_out, cmd_out_array_data);
-  if (ST_SUCCESS != status)
-    return (status);
-  status = MSG_QUEUE_INIT (&client.cmd_in, cmd_in_array_data);
-  if (ST_SUCCESS != status)
-    return (status);
-  status = MSG_QUEUE_INIT (&client.data_in, data_in_array_data);
-  if (ST_SUCCESS != status)
-    return (status);
+  MSG_QUEUE_INIT (&client.cmd_out, cmd_out_array_data);
+  MSG_QUEUE_INIT (&client.cmd_in, cmd_in_array_data);
+  MSG_QUEUE_INIT (&client.data_in, data_in_array_data);
 
   status = start_digest_calculators (&client);
 
@@ -271,7 +265,7 @@ configure_data_connection (connection_t * connection)
 static status_t
 create_data_socket (connection_t * connection)
 {
-  connection->data_fd = socket (PF_INET, SOCK_DGRAM, 0);
+  connection->data_fd = socket (PF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (connection->data_fd <= 0)
     {
       ERROR_MSG ("Data socket failed errno(%d) '%s'.", errno, strerror (errno));
@@ -317,7 +311,7 @@ create_server_socket (context_t * context)
     .context = context,
   };
 
-  connection.cmd_fd = socket (PF_INET, SOCK_STREAM, 0);
+  connection.cmd_fd = socket (PF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (connection.cmd_fd < 0)
     {
       ERROR_MSG ("Command socket failed errno(%d) '%s'.", errno, strerror (errno));

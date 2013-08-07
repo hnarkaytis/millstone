@@ -1,7 +1,7 @@
 #include <millstone.h>
+#include <logging.h>
 #include <block.h>
 #include <msg.h>
-#include <logging.h>
 #include <file_meta.h>
 #include <calc_digest.h>
 #include <client.h>

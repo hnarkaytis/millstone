@@ -559,15 +559,12 @@ run_server (config_t * config)
       return (ST_FAILURE);
     }
 
-  status_t status;
+  status_t status = ST_FAILURE;
   int rv = bind (server_ctx.data_sock, (struct sockaddr *)&server_ctx.server_name, sizeof (server_ctx.server_name));
   if (0 == rv)
     status = start_data_readers (&server_ctx);
   else
-    {
-      ERROR_MSG ("bind failed errno(%d) '%s'.", errno, strerror (errno));
-      status = ST_FAILURE;
-    }
+    ERROR_MSG ("bind failed errno(%d) '%s'.", errno, strerror (errno));
   
   close (server_ctx.data_sock);
   

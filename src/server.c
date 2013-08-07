@@ -9,8 +9,10 @@
 #include <server.h>
 
 #include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close, ftruncate64 */
-#include <errno.h> /* errno, strerror */
+#include <string.h> /* memcpy, strerror */
+#include <errno.h> /* errno */
 #include <sys/user.h> /* PAGE_SIZE */
+#include <sys/mman.h> /* mmap64, unmap */
 
 #include <pthread.h>
 
@@ -48,8 +50,8 @@ TYPEDEF_STRUCT (server_t,
 
 TYPEDEF_STRUCT (accepter_ctx_t,
 		(server_ctx_t *, server_ctx),
-		(struct sockaddr_in, client_name),
-		(socklen_t, client_addr_size),
+		(struct sockaddr_in, remote),
+		(socklen_t, remote_addr_size),
 		int fd,
 		(pthread_mutex_t, mutex),
 		)
@@ -330,7 +332,7 @@ handle_client (void * arg)
   memset (&connection, 0, sizeof (connection));
   connection.context = &context;
   connection.cmd_fd = accepter_ctx.fd;
-  connection.remote.sin_addr = accepter_ctx.client_name.sin_addr;
+  connection.remote.sin_addr = accepter_ctx.remote.sin_addr;
 
   server_t server;
   memset (&server, 0, sizeof (server));
@@ -391,9 +393,10 @@ run_accepter (server_ctx_t * server_ctx)
     {
       accepter_ctx_t accepter_ctx = { .mutex = PTHREAD_MUTEX_INITIALIZER, .server_ctx = server_ctx, };
 
+      accepter_ctx.remote_addr_size = sizeof (accepter_ctx.remote);
       accepter_ctx.fd = TEMP_FAILURE_RETRY (accept (server_ctx->server_sock,
-						    (struct sockaddr*)&accepter_ctx.client_name,
-						    &accepter_ctx.client_addr_size));
+						    (struct sockaddr*)&accepter_ctx.remote,
+						    &accepter_ctx.remote_addr_size));
       
       if (accepter_ctx.fd < 0)
 	{
@@ -442,7 +445,33 @@ create_server_socket (server_ctx_t * server_ctx)
 static status_t
 put_data_block (server_t * server, unsigned char * buf, int size)
 {
-  return (ST_SUCCESS);
+  status_t status = ST_FAILURE;
+  block_id_t * block_id = (block_id_t *)buf;
+  if (size < sizeof (*block_id))
+    {
+      ERROR_MSG ("Recieved block is too small.");
+      return (ST_FAILURE);
+    }
+  if (block_id->size + sizeof (*block_id) != size)
+    {
+      ERROR_MSG ("Packet size mismatched header info.");
+      return (ST_FAILURE);
+    }
+  
+  unsigned char * data = mmap64 (NULL, block_id->size, PROT_READ, MAP_PRIVATE,
+				 server->connection->context->file_fd, block_id->offset);
+  if (-1 == (long)data)
+    FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+  else
+    {
+      memcpy (data, &buf[sizeof (*block_id)], block_id->size);
+      if (0 != munmap (data, block_id->size))
+	ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
+      else
+	status = ST_SUCCESS;
+    }
+  
+  return (status);
 }
 
 static void *

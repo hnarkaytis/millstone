@@ -6,8 +6,8 @@
 #include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close, ftruncate64 */
 #include <errno.h> /* errno for TEMP_FAILURE_RETRY */
 #include <fcntl.h> /* open64, lseek64, SEEK_END */
-#include <string.h> /* memset, setlen */
-#include <errno.h> /* errno, strerror */
+#include <string.h> /* memset, setlen, strerror */
+#include <errno.h> /* errno */
 #include <stdbool.h> /* bool */
 #include <sys/stat.h> /* S_IRUSR, S_IWUSR */
 #include <sys/uio.h> /* writev, struct iovec */

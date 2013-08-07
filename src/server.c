@@ -350,7 +350,7 @@ handle_client (void * arg)
   server.task_queue.array.alloc_size = -1;
   queue_init (&server.task_queue.queue, (mr_rarray_t*)&server.task_queue.array, sizeof (server.task_queue.array.data[0]));
 
-  status_t status = read_file_meta (&connection); /* reads UDP port of remote */
+  status_t status = read_file_meta (&connection); /* reads UDP port of remote into connection_t and opens file for write */
 
   if (ST_SUCCESS == status)
     {
@@ -457,7 +457,10 @@ put_data_block (server_t * server, unsigned char * buf, int size)
       ERROR_MSG ("Packet size mismatched header info.");
       return (ST_FAILURE);
     }
-  
+
+  /* unregister block in registry */
+  sync_storage_del (&server->data_blocks, offset_key (block_id->offset));
+
   unsigned char * data = mmap64 (NULL, block_id->size, PROT_READ, MAP_PRIVATE,
 				 server->connection->context->file_fd, block_id->offset);
   if (-1 == (long)data)
@@ -480,7 +483,11 @@ server_data_reader (void * arg)
   server_ctx_t * server_ctx = arg;
   unsigned char buf[1 << 16];
   connection_t connection;
-  server_t server = { .connection = &connection, };
+  server_t server;
+
+  memset (&connection, 0, sizeof (connection));
+  memset (&server, 0, sizeof (server));
+  server.connection = &connection;
       
   for (;;)
     {

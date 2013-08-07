@@ -35,7 +35,7 @@ TYPEDEF_STRUCT (server_ctx_t,
 		int server_sock,
 		int data_sock,
 		(sync_storage_t, clients),
-		(struct sockaddr_in, name),
+		(struct sockaddr_in, server_name),
 		)
 
 TYPEDEF_STRUCT (server_t,
@@ -70,6 +70,30 @@ static long
 offset_key (off64_t offset)
 {
   return (offset / MIN_BLOCK_SIZE);
+}
+
+static int
+addr_compar (const mr_ptr_t x, const mr_ptr_t y, const void * null)
+{
+  server_t * server_x = x.ptr;
+  server_t * server_y = y.ptr;
+  struct sockaddr_in * addr_x = &server_x->connection->remote;
+  struct sockaddr_in * addr_y = &server_y->connection->remote;
+  int cmp = (addr_x->sin_addr.s_addr > addr_y->sin_addr.s_addr) -
+    (addr_x->sin_addr.s_addr < addr_y->sin_addr.s_addr);
+  if (cmp)
+    return (cmp);
+  cmp = (addr_x->sin_port > addr_y->sin_port) -
+    (addr_x->sin_port < addr_y->sin_port);
+  return (cmp);
+}
+
+static mr_hash_value_t
+addr_hash (const mr_ptr_t key, const void * context)
+{
+  server_t * server = key.ptr;
+  struct sockaddr_in * addr = &server->connection->remote;
+  return (addr->sin_addr.s_addr + 0xDeadBeef * addr->sin_port);
 }
 
 static status_t
@@ -306,7 +330,7 @@ handle_client (void * arg)
   memset (&connection, 0, sizeof (connection));
   connection.context = &context;
   connection.cmd_fd = accepter_ctx.fd;
-  connection.name = accepter_ctx.client_name;
+  connection.remote.sin_addr = accepter_ctx.client_name.sin_addr;
 
   server_t server;
   memset (&server, 0, sizeof (server));
@@ -324,11 +348,13 @@ handle_client (void * arg)
   server.task_queue.array.alloc_size = -1;
   queue_init (&server.task_queue.queue, (mr_rarray_t*)&server.task_queue.array, sizeof (server.task_queue.array.data[0]));
 
-  status_t status = read_file_meta (&connection);
-  
+  status_t status = read_file_meta (&connection); /* reads UDP port of remote */
+
   if (ST_SUCCESS == status)
     {
-      status = start_cmd_reader (&server);
+      status = sync_storage_add (&server.server_ctx->clients, &server);
+      if (ST_SUCCESS == status)
+	status = start_cmd_reader (&server);
       close (context.file_fd);
     }
   
@@ -347,7 +373,7 @@ run_accepter (server_ctx_t * server_ctx)
   setsockopt (server_ctx->server_sock, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof (reuse_addr));
   setsockopt (server_ctx->server_sock, SOL_SOCKET, SO_LINGER, &linger_opt, sizeof (linger_opt));
 
-  int rv = bind (server_ctx->server_sock, (struct sockaddr *)&server_ctx->name, sizeof (server_ctx->name));
+  int rv = bind (server_ctx->server_sock, (struct sockaddr *)&server_ctx->server_name, sizeof (server_ctx->server_name));
   if (rv < 0)
     {
       ERROR_MSG ("bind failed errno(%d) '%s'.", errno, strerror (errno));
@@ -365,10 +391,9 @@ run_accepter (server_ctx_t * server_ctx)
     {
       accepter_ctx_t accepter_ctx = { .mutex = PTHREAD_MUTEX_INITIALIZER, .server_ctx = server_ctx, };
 
-      accepter_ctx.fd = TEMP_FAILURE_RETRY
-	(accept (server_ctx->server_sock,
-		 (struct sockaddr*)&accepter_ctx.client_name,
-		 &accepter_ctx.client_addr_size));
+      accepter_ctx.fd = TEMP_FAILURE_RETRY (accept (server_ctx->server_sock,
+						    (struct sockaddr*)&accepter_ctx.client_name,
+						    &accepter_ctx.client_addr_size));
       
       if (accepter_ctx.fd < 0)
 	{
@@ -420,59 +445,40 @@ put_data_block (server_t * server, unsigned char * buf, int size)
   return (ST_SUCCESS);
 }
 
-static int
-addr_compar (const mr_ptr_t x, const mr_ptr_t y, const void * null)
-{
-  server_t * server_x = x.ptr;
-  server_t * server_y = y.ptr;
-  int cmp = (server_x->connection->name.sin_addr.s_addr > server_y->connection->name.sin_addr.s_addr) -
-    (server_x->connection->name.sin_addr.s_addr < server_y->connection->name.sin_addr.s_addr);
-  if (cmp)
-    return (cmp);
-  cmp = (server_x->connection->name.sin_port > server_y->connection->name.sin_port) -
-    (server_x->connection->name.sin_port < server_y->connection->name.sin_port);
-  return (cmp);
-}
-
-static mr_hash_value_t
-addr_hash (const mr_ptr_t key, const void * context)
-{
-  server_t * server = key.ptr;
-  return (server->connection->name.sin_addr.s_addr +
-	  0xDeadBeef * server->connection->name.sin_port);
-}
-
 static void *
 server_data_reader (void * arg)
 {
   server_ctx_t * server_ctx = arg;
   unsigned char buf[1 << 16];
-  
+  connection_t connection;
+  server_t server = { .connection = &connection, };
+      
   for (;;)
     {
-      struct sockaddr addr;
-      struct sockaddr_in addr_in;
-      socklen_t addr_len;
-      int rv = recvfrom (server_ctx->data_sock, buf, sizeof (buf), 0, &addr, &addr_len);
+      union {
+	struct sockaddr _addr;
+	struct sockaddr_in addr_in;
+      } addr;
+      socklen_t addr_len = sizeof (addr);
+      int rv = recvfrom (server_ctx->data_sock, buf, sizeof (buf), 0, &addr._addr, &addr_len);
       if (rv <= 0)
 	{
 	  ERROR_MSG ("Failed to recieve UDP packet.");
 	  continue;
 	}
-      if (addr_len != sizeof (addr_in))
+      if (addr_len != sizeof (addr.addr_in))
 	{
 	  ERROR_MSG ("Got UDP packet from unknown type of address.");
 	  continue;
 	}
-      memcpy (&addr_in, &addr, sizeof (addr_in));
-      mr_ptr_t * find = sync_storage_find (&server_ctx->clients, &addr_in);
+      connection.remote = addr.addr_in;
+      mr_ptr_t * find = sync_storage_find (&server_ctx->clients, &server);
       if (NULL == find)
 	{
 	  ERROR_MSG ("Unknown client.");
 	  continue;
 	}
-      server_t * server = find->ptr;
-      put_data_block (server, buf, rv);
+      put_data_block (find->ptr, buf, rv);
     }
   return (NULL);
 }
@@ -511,9 +517,9 @@ run_server (config_t * config)
   memset (&server_ctx, 0, sizeof (server_ctx));
   server_ctx.config = config;
   
-  server_ctx.name.sin_family = AF_INET;
-  server_ctx.name.sin_port = htons (config->listen_port);
-  server_ctx.name.sin_addr.s_addr = htonl (INADDR_ANY);
+  server_ctx.server_name.sin_family = AF_INET;
+  server_ctx.server_name.sin_port = htons (config->listen_port);
+  server_ctx.server_name.sin_addr.s_addr = htonl (INADDR_ANY);
 
   sync_storage_init (&server_ctx.clients, addr_compar, addr_hash, "server_t", NULL);
   
@@ -525,7 +531,7 @@ run_server (config_t * config)
     }
 
   status_t status;
-  int rv = bind (server_ctx.data_sock, (struct sockaddr *)&server_ctx.name, sizeof (server_ctx.name));
+  int rv = bind (server_ctx.data_sock, (struct sockaddr *)&server_ctx.server_name, sizeof (server_ctx.server_name));
   if (0 == rv)
     status = start_data_readers (&server_ctx);
   else

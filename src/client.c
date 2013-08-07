@@ -8,9 +8,9 @@
 
 #define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
 #include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close, lseek64, SEEK_END */
-#include <errno.h> /* errno, strerror */
+#include <errno.h> /* errno */
 #include <fcntl.h> /* open64 */
-#include <string.h> /* memset, setlen */
+#include <string.h> /* memset, setlen, strerror */
 #include <netdb.h> /* gethostbyname */
 #include <netinet/in.h> /* htonl, struct sockaddr_in */
 #include <sys/mman.h> /* mmap64, unmap */
@@ -249,12 +249,15 @@ run_session (connection_t * connection)
 static status_t
 configure_data_connection (connection_t * connection)
 {
-  int rv = TEMP_FAILURE_RETRY (connect (connection->data_fd, (struct sockaddr *)&connection->name, sizeof (connection->name)));
+  int rv = TEMP_FAILURE_RETRY (connect (connection->data_fd, (struct sockaddr *)&connection->remote, sizeof (connection->remote)));
   if (rv < 0)
     {
       ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
       return (ST_FAILURE);
     }
+  
+  socklen_t socklen = sizeof (connection->local); 
+  getsockname (connection->data_fd, (struct sockaddr *)&connection->local, &socklen); 
 
   status_t status = run_session (connection);
   shutdown (connection->data_fd, SD_BOTH);
@@ -283,14 +286,14 @@ connect_to_server (connection_t * connection)
 {
   struct hostent * hostinfo = gethostbyname (connection->context->config->dst_host);
   if (hostinfo != NULL)
-    connection->name.sin_addr.s_addr = *((in_addr_t*) hostinfo->h_addr);
+    connection->remote.sin_addr.s_addr = *((in_addr_t*) hostinfo->h_addr);
   else
-    connection->name.sin_addr.s_addr = htonl (INADDR_ANY);
+    connection->remote.sin_addr.s_addr = htonl (INADDR_ANY);
 
-  connection->name.sin_family = AF_INET;
-  connection->name.sin_port = htons (connection->context->config->dst_port);
+  connection->remote.sin_family = AF_INET;
+  connection->remote.sin_port = htons (connection->context->config->dst_port);
 
-  int rv = TEMP_FAILURE_RETRY (connect (connection->cmd_fd, (struct sockaddr *)&connection->name, sizeof (connection->name)));
+  int rv = TEMP_FAILURE_RETRY (connect (connection->cmd_fd, (struct sockaddr *)&connection->remote, sizeof (connection->remote)));
   if (rv < 0)
     {
       ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));

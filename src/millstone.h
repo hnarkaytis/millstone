@@ -39,7 +39,8 @@ TYPEDEF_STRUCT (context_t,
 
 TYPEDEF_STRUCT (connection_t,
 		(context_t *, context),
-		(struct sockaddr_in, name),
+		(struct sockaddr_in, local),
+		(struct sockaddr_in, remote),
 		int cmd_fd,
 		int data_fd,
 		)

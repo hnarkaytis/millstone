@@ -16,7 +16,6 @@
 #include <sys/uio.h> /* writev, struct iovec */
 #include <sys/socket.h> /* socket, shutdown, connect */
 
-#include <openssl/sha.h> /* SHA1 */
 #include <pthread.h>
 
 TYPEDEF_STRUCT (client_t,

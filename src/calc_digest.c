@@ -6,6 +6,8 @@
 #include <sys/mman.h> /* mmap64, unmap */
 #include <errno.h> /* errno, strerror */
 
+#include <openssl/sha.h> /* SHA1 */
+
 status_t
 calc_digest (block_digest_t * block_digest, int fd)
 {

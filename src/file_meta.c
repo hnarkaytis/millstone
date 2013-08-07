@@ -90,7 +90,7 @@ send_file_meta (connection_t * connection)
   ssize_t rv = TEMP_FAILURE_RETRY (writev (connection->cmd_fd, iov, sizeof (iov) / sizeof (iov[0])));
   ssize_t i, len = 0;
   for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
-    len = iov[i].iov_len;
+    len += iov[i].iov_len;
 
   status_t status = ST_SUCCESS;
   if (rv != len)

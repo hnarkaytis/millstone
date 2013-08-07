@@ -519,7 +519,7 @@ start_data_readers (server_ctx_t * server_ctx)
   pthread_t ids[DATA_READERS];
   status_t status = ST_FAILURE;
 
-  for (i = 0; i < DATA_READERS; ++i)
+  for (i = 0; i < sizeof (ids) / sizeof (ids[0]); ++i)
     {
       int rv = pthread_create (&ids[i], NULL, server_data_reader, server_ctx);
       if (rv != 0)

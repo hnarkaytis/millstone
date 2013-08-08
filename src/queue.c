@@ -1,11 +1,12 @@
+#include <millstone.h>
+#include <logging.h>
+#include <queue.h>
+
 #include <stddef.h>
 #include <string.h>
 
 #include <pthread.h>
-
-#include <millstone.h>
-#include <logging.h>
-#include <queue.h>
+#include <metaresc.h>
 
 void
 queue_init (queue_t * queue, mr_rarray_t * array, size_t elem_size)

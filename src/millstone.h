@@ -11,6 +11,8 @@
 
 #include <metaresc.h>
 
+#include <logging.h>
+
 #define DEFAULT_LISTEN_PORT (31415)
 
 #ifndef SD_BOTH
@@ -45,6 +47,7 @@ TYPEDEF_STRUCT (connection_t,
 		int data_fd,
 		)
 
+#if defined COMPILE_LOG_LEVEL_LL_ALL || defined COMPILE_LOG_LEVEL_LL_INFO || defined COMPILE_LOG_LEVEL_LL_DEBUG
 #define DUMP_VAR(TYPE, VAR) ({					\
       char * dump = MR_SAVE_CINIT (TYPE, VAR);			\
       if (dump)							\
@@ -53,5 +56,8 @@ TYPEDEF_STRUCT (connection_t,
 	  MR_FREE (dump);					\
 	}							\
     })
+#else
+#define DUMP_VAR _OFF_MSG
+#endif
 
 #endif /* _MILLSTONE_H_ */

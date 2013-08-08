@@ -9,8 +9,6 @@
 
 #include "logging.h"
 
-#define DEFAULT_LOG_LEVEL (LL_INFO)
-
 #define LL_INIT(LEVEL) [LL_##LEVEL] = #LEVEL
 static const char * log_level_str[] =
   {

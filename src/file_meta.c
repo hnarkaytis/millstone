@@ -15,8 +15,10 @@
 status_t
 read_file_meta (connection_t * connection)
 {
-  ssize_t len = sizeof (connection->context->size);
-  ssize_t rv = TEMP_FAILURE_RETRY (read (connection->cmd_fd, &connection->context->size, len));
+  ssize_t len, rv;
+  
+  len = sizeof (connection->context->size);
+  rv = TEMP_FAILURE_RETRY (read (connection->cmd_fd, &connection->context->size, len));
   if (rv != len)
     {
       ERROR_MSG ("Failed to read file size from client.");
@@ -48,6 +50,9 @@ read_file_meta (connection_t * connection)
       }
   } while (dst_file[count++] != 0);
 
+  DEBUG_MSG ("Got from client: port %04x size:%zd filename '%s'.",
+	     connection->remote.sin_port, connection->context->size, dst_file);
+  
   rv = access (dst_file, F_OK);
   connection->context->file_exists = (0 == rv);
   if (connection->context->file_exists)
@@ -82,8 +87,8 @@ status_t
 send_file_meta (connection_t * connection)
 {
   const struct iovec iov[] = {
-    { .iov_len = sizeof (connection->local.sin_port), .iov_base = &connection->local.sin_port, },
     { .iov_len = sizeof (connection->context->size), .iov_base = &connection->context->size, },
+    { .iov_len = sizeof (connection->local.sin_port), .iov_base = &connection->local.sin_port, },
     { .iov_len = strlen (connection->context->config->dst_file) + 1, .iov_base = connection->context->config->dst_file, },
   };
 

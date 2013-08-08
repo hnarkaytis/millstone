@@ -15,6 +15,7 @@ parse_args (int argc, char * argv[], config_t * config)
     {
       /* These options set a flag. */
       {"compress", no_argument, NULL, 'c'},
+      {"log-level", required_argument, NULL, 'l'},
       {0, 0, 0, 0}
     };
   /* `getopt_long' stores the option index here. */
@@ -22,8 +23,9 @@ parse_args (int argc, char * argv[], config_t * config)
 
   memset (config, 0, sizeof (*config));
   config->listen_port = DEFAULT_LISTEN_PORT;
+  config->dst_port = DEFAULT_LISTEN_PORT;
   
-  while ((c = getopt_long (argc, argv, "c", long_options, &option_index)) != -1)
+  while ((c = getopt_long (argc, argv, "cl:", long_options, &option_index)) != -1)
     switch (c)
       {
       case 0:
@@ -37,6 +39,13 @@ parse_args (int argc, char * argv[], config_t * config)
 	break;
 
       case 'c':
+	break;
+      case 'l':
+	{
+	  log_level_t log_level = get_log_level (optarg);
+	  set_log_level (log_level);
+	  DUMP_VAR (log_level_t, &log_level);
+	}
 	break;
       }
   
@@ -84,10 +93,12 @@ parse_args (int argc, char * argv[], config_t * config)
 int main (int argc, char * argv[])
 {
   config_t config;
+  DEBUG_MSG ("Start Millstone. Parse params.");
   status_t status = parse_args (argc, argv, &config);
   if (ST_SUCCESS != status)
     return (EXIT_FAILURE);
 
+  DUMP_VAR (config_t, &config);
   switch (config.run_mode)
     {
     case RM_SERVER:
@@ -100,6 +111,7 @@ int main (int argc, char * argv[])
       status = ST_FAILURE;
       break;
     }
+  DEBUG_MSG ("Stop Millstone.");
 
   return ((ST_SUCCESS != status) ? EXIT_FAILURE : EXIT_SUCCESS);
 }

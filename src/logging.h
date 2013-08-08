@@ -1,16 +1,18 @@
 #ifndef LOGGING_H
 #define LOGGING_H
 
-typedef enum log_level_t {
-  LL_ALL,
-  LL_TRACE,
-  LL_DEBUG,
-  LL_INFO,
-  LL_WARN,
-  LL_ERROR,
-  LL_FATAL,
-  LL_OFF,
-} log_level_t;
+#include <metaresc.h>
+
+TYPEDEF_ENUM (log_level_t,
+	      LL_ALL,
+	      LL_TRACE,
+	      LL_DEBUG,
+	      LL_INFO,
+	      LL_WARN,
+	      LL_ERROR,
+	      LL_FATAL,
+	      LL_OFF,
+	      )
 
 extern void set_log_level (log_level_t log_level);
 extern log_level_t get_log_level (char * log_level);

@@ -63,7 +63,7 @@ log_message (const char * filename, const char * function, int line, log_level_t
       va_end (args);
       fprintf (stderr, "\n");
       
-      if (log_level <= LL_DEBUG)
+      if (log_level < LL_DEBUG)
 	{
 	  void * array[8];
 	  size_t size;

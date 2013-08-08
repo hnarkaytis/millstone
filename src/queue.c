@@ -18,6 +18,7 @@ queue_init (queue_t * queue, mr_rarray_t * array, size_t elem_size)
   queue->elem_size = elem_size;
   queue->count = array->size / elem_size;
   queue->used = 0;
+  memset (array->data, 0, array->size);
   pthread_mutex_init (&queue->mutex, NULL);
   pthread_cond_init (&queue->full, NULL);
   pthread_cond_init (&queue->empty, NULL);

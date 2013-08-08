@@ -45,13 +45,13 @@ TYPEDEF_STRUCT (connection_t,
 		int data_fd,
 		)
 
-#define DUMP_VAR(TYPE, VAR) ({			\
-      char * dump = MR_SAVE_CINIT (TYPE, VAR);	\
-      if (dump)					\
-	{					\
-	  printf ("%s\n", dump);		\
-	  MR_FREE (dump);			\
-	}					\
+#define DUMP_VAR(TYPE, VAR) ({					\
+      char * dump = MR_SAVE_CINIT (TYPE, VAR);			\
+      if (dump)							\
+	{							\
+	  DEBUG_MSG ("\n(" #TYPE ")*" #VAR " = %s", dump);	\
+	  MR_FREE (dump);					\
+	}							\
     })
 
 #endif /* _MILLSTONE_H_ */

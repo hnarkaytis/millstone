@@ -45,7 +45,9 @@ TYPEDEF_STRUCT (server_t,
 		(msg_queue_t, cmd_out),
 		(task_queue_t, task_queue),
 		(sync_storage_t, data_blocks),
-		(server_ctx_t *, server_ctx)
+		(server_ctx_t *, server_ctx),
+		int tip,
+		(pthread_mutex_t, tip_mutex),
 		)
 
 TYPEDEF_STRUCT (accepter_ctx_t,
@@ -98,6 +100,42 @@ addr_hash (const mr_ptr_t key, const void * context)
   return (addr->sin_addr.s_addr + 0xDeadBeef * addr->sin_port);
 }
 
+static void
+push_tip (server_t * server, queue_t * queue, void * item)
+{
+  pthread_mutex_lock (&server->tip_mutex);
+  ++server->tip;
+  pthread_mutex_unlock (&server->tip_mutex);
+  queue_push (queue, item);
+}
+
+static void
+push_msg (server_t * server, msg_t * msg)
+{
+  push_tip (server, &server->cmd_out.queue, msg);
+}
+
+static void
+push_task (server_t * server, task_t * task)
+{
+  push_tip (server, &server->task_queue.queue, task);
+}
+
+static void
+finish_tip (server_t * server)
+{
+  pthread_mutex_lock (&server->tip_mutex);
+  --server->tip;
+  pthread_mutex_unlock (&server->tip_mutex);
+  if (0 == server->tip)
+    {
+      msg_t msg;
+      memset (&msg, 0, sizeof (msg));
+      msg.msg_type = MT_TERMINATE;
+      push_msg (server, &msg);
+    }
+}
+
 static status_t
 block_matched (server_t * server, block_matched_t * block_matched)
 {
@@ -113,7 +151,7 @@ block_matched (server_t * server, block_matched_t * block_matched)
       task.block_id = block_matched->block_id;
       task.size = block_matched->block_id.size / SPLIT_RATIO;
       DUMP_VAR (task_t, &task);
-      queue_push (&server->task_queue.queue, &task);
+      push_task (server, &task);
       DEBUG_MSG ("Task pushed to queue.");
     }
   else
@@ -125,7 +163,7 @@ block_matched (server_t * server, block_matched_t * block_matched)
       DUMP_VAR (msg_t, &msg);
       status = sync_storage_add (&server->data_blocks, offset_key (msg.msg_data.block_id.offset));
       if (ST_SUCCESS == status)
-	queue_push (&server->cmd_out.queue, &msg);
+	push_msg (server, &msg);
       DEBUG_MSG ("Mesasge pushed to queue with status %d.", status);
     }
   return (status);
@@ -142,7 +180,7 @@ block_sent (server_t * server, block_id_t * block_id)
       msg.msg_type = MT_BLOCK_REQUEST;
       msg.msg_data.block_id = *block_id;
       DEBUG_MSG ("Request block %zd:%zd once again.", block_id->offset, block_id->size);
-      queue_push (&server->cmd_out.queue, &msg);
+      push_msg (server, &msg);
       DEBUG_MSG ("Request for block %zd:%zd pushed to queue.", block_id->offset, block_id->size);
     }
   return (ST_SUCCESS);
@@ -158,11 +196,12 @@ server_cmd_reader (void * arg)
     {
       msg_t msg;
       status_t status = msg_recv (server->connection->cmd_fd, &msg);
-      DEBUG_MSG ("Got command message. Status %d.", status);
+
       if (ST_SUCCESS != status)
 	break;
 
       DUMP_VAR (msg_t, & msg);
+      
       switch (msg.msg_type)
 	{
 	case MT_BLOCK_MATCHED:
@@ -182,6 +221,8 @@ server_cmd_reader (void * arg)
 	}
       if (ST_SUCCESS != status)
 	break;
+      
+      finish_tip (server);
     }
   shutdown (server->connection->cmd_fd, SD_BOTH);
   DEBUG_MSG ("Exiting server command reader thread.");
@@ -216,9 +257,11 @@ server_worker (void * arg)
 	  if (ST_SUCCESS != status)
 	    break;
 	  DEBUG_MSG ("Pushing to outgoing queue digest for offset %zd.", msg.msg_data.block_id.offset);
-	  queue_push (&server->cmd_out.queue, &msg);
+	  push_msg (server, &msg);
 	  DEBUG_MSG ("Pushed digest for offset %zd.", msg.msg_data.block_id.offset);
 	}
+
+      finish_tip (server);
     }
   DEBUG_MSG ("Exiting server worker.");
   return (NULL);
@@ -293,13 +336,23 @@ data_retrieval (void * arg)
   memset (&msg, 0, sizeof (msg));
   msg.msg_type = MT_BLOCK_REQUEST;
   msg.msg_data.block_id.size = MIN_BLOCK_SIZE;
+
+  /* make a fake task-in-progress just to make sure that command reciever will not send MT_TERMINATE */
+  pthread_mutex_lock (&server->tip_mutex);
+  ++server->tip;
+  pthread_mutex_unlock (&server->tip_mutex);
+  
   for (offset = 0; offset < server->connection->context->size; offset += msg.msg_data.block_id.size)
     {
       if (msg.msg_data.block_id.size > server->connection->context->size - offset)
 	msg.msg_data.block_id.size = server->connection->context->size - offset;
       DEBUG_MSG ("Push task to get block %zd:%zd.", msg.msg_data.block_id.offset, msg.msg_data.block_id.size);
-      queue_push (&server->cmd_out.queue, &msg);
+      push_msg (server, &msg);
     }
+
+  /* finish fake task-in-progress */
+  finish_tip (server);
+  
   DEBUG_MSG ("Exiting data retrieval thread.");
   return (NULL);
 }
@@ -350,7 +403,7 @@ start_cmd_reader (server_t * server)
       task.block_id.size = server->connection->context->size;
       task.size = MAX_BLOCK_SIZE;
       DEBUG_MSG ("File on server exists. Push initial task.");
-      queue_push (&server->task_queue.queue, &task);
+      push_task (server, &task);
       DEBUG_MSG ("Start workers.");
       status = start_workers (server);
     }
@@ -383,6 +436,7 @@ handle_client (void * arg)
   server_t server;
   memset (&server, 0, sizeof (server));
   server.connection = &connection;
+  server.tip = 0;
   server.server_ctx = accepter_ctx.server_ctx;
   
   sync_storage_init (&server.data_blocks, offset_key_compar, offset_key_hash, "long_int_t", NULL);

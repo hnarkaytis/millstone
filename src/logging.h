@@ -1,8 +1,8 @@
 #ifndef LOGGING_H
 #define LOGGING_H
 
-#define DEFAULT_LOG_LEVEL (LL_DEBUG)
-#define COMPILE_LOG_LEVEL_LL_ALL
+#define DEFAULT_LOG_LEVEL (LL_INFO)
+#define COMPILE_LOG_LEVEL_LL_OFF
 
 #include <metaresc.h>
 

@@ -142,6 +142,21 @@ finish_tip (server_t * server)
 }
 
 static status_t
+send_block_request (server_t * server, block_id_t * block_id)
+{
+  msg_t msg;
+  memset (&msg, 0, sizeof (msg));
+  msg.msg_type = MT_BLOCK_REQUEST;
+  msg.msg_data.block_id = *block_id;
+  DUMP_VAR (msg_t, &msg);
+  status_t status = sync_storage_add (&server->data_blocks, offset_key (msg.msg_data.block_id.offset));
+  if (ST_SUCCESS == status)
+    status = push_msg (server, &msg);
+  DEBUG_MSG ("Mesasge pushed to queue with status %d.", status);
+  return (status);
+}
+
+static status_t
 block_matched (server_t * server, block_matched_t * block_matched)
 {
   status_t status = ST_SUCCESS;
@@ -162,17 +177,7 @@ block_matched (server_t * server, block_matched_t * block_matched)
       DEBUG_MSG ("Task pushed to queue.");
     }
   else
-    {
-      msg_t msg;
-      memset (&msg, 0, sizeof (msg));
-      msg.msg_type = MT_BLOCK_REQUEST;
-      msg.msg_data.block_id = block_matched->block_id;
-      DUMP_VAR (msg_t, &msg);
-      status = sync_storage_add (&server->data_blocks, offset_key (msg.msg_data.block_id.offset));
-      if (ST_SUCCESS == status)
-	status = push_msg (server, &msg);
-      DEBUG_MSG ("Mesasge pushed to queue with status %d.", status);
-    }
+    status = send_block_request (server, &block_matched->block_id);
   return (status);
 }
 
@@ -182,15 +187,7 @@ block_sent (server_t * server, block_id_t * block_id)
   status_t status = ST_SUCCESS;
   DEBUG_MSG ("Got confirmation for block %zd:%zd.", block_id->offset, block_id->size);
   if (NULL != sync_storage_find (&server->data_blocks, offset_key (block_id->offset)))
-    {
-      msg_t msg;
-      memset (&msg, 0, sizeof (msg));
-      msg.msg_type = MT_BLOCK_REQUEST;
-      msg.msg_data.block_id = *block_id;
-      DEBUG_MSG ("Request block %zd:%zd once again.", block_id->offset, block_id->size);
-      status = push_msg (server, &msg);
-      DEBUG_MSG ("Request for block %zd:%zd pushed to queue.", block_id->offset, block_id->size);
-    }
+    status = send_block_request (server, block_id);
   return (status);
 }
 
@@ -227,10 +224,8 @@ server_cmd_reader (void * arg)
 	  status = ST_FAILURE;
 	  break;
 	}
-      if (ST_SUCCESS != status)
+      if (ST_SUCCESS != finish_tip (server))
 	break;
-      
-      status = finish_tip (server);
       if (ST_SUCCESS != status)
 	break;
     }
@@ -349,28 +344,25 @@ static void *
 data_retrieval (void * arg)
 {
   server_t * server = arg;
-  msg_t msg;
-  block_id_t * block_id = &msg.msg_data.block_id;
+  block_id_t block_id;
   
   DEBUG_MSG ("Data retrieval thread has started.");
-  memset (&msg, 0, sizeof (msg));
-  msg.msg_type = MT_BLOCK_REQUEST;
-  block_id->size = MIN_BLOCK_SIZE;
+  memset (&block_id, 0, sizeof (block_id));
+  block_id.size = MIN_BLOCK_SIZE;
 
   /* make a fake task-in-progress just to make sure that command reciever will not send MT_TERMINATE */
   pthread_mutex_lock (&server->tip_mutex);
   ++server->tip;
   pthread_mutex_unlock (&server->tip_mutex);
   
-  for (block_id->offset = 0;
-       block_id->offset < server->connection->context->size;
-       block_id->offset += block_id->size)
+  for (block_id.offset = 0;
+       block_id.offset < server->connection->context->size;
+       block_id.offset += block_id.size)
     {
-      if (block_id->size > server->connection->context->size - block_id->offset)
-	block_id->size = server->connection->context->size - block_id->offset;
+      if (block_id.size > server->connection->context->size - block_id.offset)
+	block_id.size = server->connection->context->size - block_id.offset;
       
-      DEBUG_MSG ("Push task to get block %zd:%zd.", block_id->offset, block_id->size);
-      status_t status = push_msg (server, &msg);
+      status_t status = send_block_request (server, &block_id);
       if (ST_SUCCESS != status)
 	break;
     }
@@ -491,6 +483,9 @@ handle_client (void * arg)
   
   shutdown (accepter_ctx.fd, SD_BOTH);
   close (accepter_ctx.fd);
+
+  sync_storage_free (&server.data_blocks, NULL);
+  
   DEBUG_MSG ("Closed connection to client: %08x:%04x.", accepter_ctx.remote.sin_addr.s_addr, accepter_ctx.remote.sin_port);
   return (NULL);
 }
@@ -725,6 +720,7 @@ run_server (config_t * config)
     ERROR_MSG ("bind failed errno(%d) '%s'.", errno, strerror (errno));
   
   close (server_ctx.data_sock);
+  sync_storage_free (&server_ctx.clients, NULL);
   DEBUG_MSG ("Closed data socket. Exiting server.");
   
   return (status);

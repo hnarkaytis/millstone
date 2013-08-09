@@ -63,3 +63,16 @@ sync_storage_init (sync_storage_t * sync_storage, mr_compar_fn_t compar_fn, mr_h
   sync_storage->key_type = key_type;
   sync_storage->context = context;
 }
+
+void
+sync_storage_free (sync_storage_t * sync_storage, mr_free_fn_t free_fn)
+{
+  int i;
+  for (i = 0; i < sizeof (sync_storage->table) / sizeof (sync_storage->table[0]); ++i)
+    {
+      pthread_mutex_lock (&sync_storage->table[i].mutex);
+      mr_tdestroy (sync_storage->table[i].tree, free_fn, sync_storage->context);
+      pthread_mutex_unlock (&sync_storage->table[i].mutex);
+    }
+  memset (sync_storage, 0, sizeof (sync_storage));
+}  

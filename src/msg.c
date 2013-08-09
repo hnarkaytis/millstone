@@ -12,13 +12,7 @@ msg_recv (int fd, msg_t * msg)
 {
   ssize_t len = sizeof (*msg);
   ssize_t rv = TEMP_FAILURE_RETRY (read (fd, msg, len));
-  status_t status = ST_SUCCESS;
-  if (rv != len)
-    {
-      ERROR_MSG ("Failed to reveive message (got %d bytes, but expexted %d bytes)", rv, len);
-      status = ST_FAILURE;
-    }
-  return (status);
+  return ((rv == len) ? ST_SUCCESS : ST_FAILURE);
 }
 
 status_t
@@ -26,13 +20,7 @@ msg_send (int fd, msg_t * msg)
 {
   ssize_t len = sizeof (*msg);
   ssize_t rv = TEMP_FAILURE_RETRY (write (fd, msg, len));
-  status_t status = ST_SUCCESS;
-  if (rv != len)
-    {
-      ERROR_MSG ("Failed to send message (got %d bytes, but expexted %d bytes)", rv, len);
-      status = ST_FAILURE;
-    }
-  return (status);
+  return ((rv == len) ? ST_SUCCESS : ST_FAILURE);
 }
 
 void

@@ -69,19 +69,30 @@ static void *
 client_data_writer (void * arg)
 {
   client_t * client = arg;
+
+  DEBUG_MSG ("Entered data writer.");
   for (;;)
     {
       msg_t msg;
-      queue_pop (&client->data_in.queue, &msg);
+      status_t status = queue_pop (&client->data_in.queue, &msg);
+      if (ST_SUCCESS != status)
+	break;
+      
       DUMP_VAR (msg_t, &msg);
-      status_t status = send_block (client, &msg.msg_data.block_id);
+      status = send_block (client, &msg.msg_data.block_id);
       DEBUG_MSG ("Data block send status %d.", status);
+      
       if (ST_SUCCESS != status)
 	msg.msg_type = MT_BLOCK_SEND_ERROR;
       else
 	msg.msg_type = MT_BLOCK_SENT;
-      queue_push (&client->cmd_out.queue, &msg);
+      
+      status = queue_push (&client->cmd_out.queue, &msg);
+      if (ST_SUCCESS != status)
+	break;
     }
+
+  DEBUG_MSG ("Exiting client data writer.");
   return (NULL);
 }
 
@@ -89,17 +100,23 @@ static void *
 client_cmd_writer (void * arg)
 {
   client_t * client = arg;
+  DEBUG_MSG ("Enter client command writer.");
   for (;;)
     {
       msg_t msg;
-      queue_pop (&client->cmd_out.queue, &msg);
+      status_t status = queue_pop (&client->cmd_out.queue, &msg);
+      if (ST_SUCCESS != status)
+	break;
+      
       DUMP_VAR (msg_t, &msg);
-      status_t status = msg_send (client->connection->cmd_fd, &msg);
+      status = msg_send (client->connection->cmd_fd, &msg);
       if (ST_SUCCESS != status)
 	break;
       DEBUG_MSG ("Message sent.");
     }
+  
   shutdown (client->connection->cmd_fd, SD_BOTH);
+  DEBUG_MSG ("Exiting client command writer.");
   return (NULL);
 }
 
@@ -108,15 +125,16 @@ digest_calculator (void * arg)
 {
   client_t * client = arg;
   block_digest_t block_digest;
-  status_t status;
   msg_t msg;
 
   DEBUG_MSG ("Entered digest calculator.");
   memset (&block_digest, 0, sizeof (block_digest));
   for (;;)
     {
-      queue_pop (&client->cmd_in.queue, &msg);
-
+      status_t status = queue_pop (&client->cmd_in.queue, &msg);
+      if (ST_SUCCESS != status)
+	break;
+      
       DUMP_VAR (msg_t, &msg);
       
       block_digest.block_id = msg.msg_data.block_digest.block_id;
@@ -129,11 +147,16 @@ digest_calculator (void * arg)
 	  msg.msg_type = MT_BLOCK_MATCHED;
 	  msg.msg_data.block_matched.matched = !memcmp (block_digest.digest, msg.msg_data.block_digest.digest, sizeof (block_digest.digest));
 	}
+      
       DEBUG_MSG ("Push message:");
       DUMP_VAR (msg_t, &msg);
-      queue_push (&client->cmd_out.queue, &msg);
+      status = queue_push (&client->cmd_out.queue, &msg);
+      if (ST_SUCCESS != status)
+	break;
       DEBUG_MSG ("Message pushed.");
     }
+
+  DEBUG_MSG ("Exiting digest calculator.");
   return (NULL);
 }
 
@@ -160,10 +183,10 @@ client_cmd_reader (client_t * client)
       switch (msg.msg_type)
 	{
 	case MT_BLOCK_DIGEST:
-	  queue_push (&client->cmd_in.queue, &msg);
+	  status = queue_push (&client->cmd_in.queue, &msg);
 	  break;
 	case MT_BLOCK_REQUEST:
-	  queue_push (&client->data_in.queue, &msg);
+	  status = queue_push (&client->data_in.queue, &msg);
 	  break;
 	default:
 	  ERROR_MSG ("Unexpected message type %d.", msg.msg_type);
@@ -191,7 +214,8 @@ start_data_writer (client_t * client)
   status_t status = client_cmd_reader (client);
   
   DEBUG_MSG ("Canceling data writer.");
-  pthread_cancel (id);
+  queue_cancel (&client->data_in.queue);
+  queue_cancel (&client->cmd_out.queue);
   pthread_join (id, NULL);
   DEBUG_MSG ("Command data canceled.");
 
@@ -213,7 +237,7 @@ start_cmd_writer (client_t * client)
   status_t status = start_data_writer (client);
   
   DEBUG_MSG ("Canceling command writer.");
-  pthread_cancel (id);
+  queue_cancel (&client->cmd_out.queue);
   pthread_join (id, NULL);
   DEBUG_MSG ("Command writer canceled.");
   
@@ -231,6 +255,7 @@ start_digest_calculators (client_t * client)
   for (i = 0; i < ncpu; ++i)
     {
       int rv = pthread_create (&ids[i], NULL, digest_calculator, client);
+      DEBUG_MSG ("Creatd thread [%d] %d.", i, ids[i]);
       if (rv != 0)
 	break;
     }
@@ -240,11 +265,10 @@ start_digest_calculators (client_t * client)
     status = start_cmd_writer (client);
 
   DEBUG_MSG ("Canceling digest calculators.");
+  queue_cancel (&client->cmd_in.queue);
+  queue_cancel (&client->cmd_out.queue);
   for (--i ; i >= 0; --i)
-    {
-      pthread_cancel (ids[i]);
-      pthread_join (ids[i], NULL);
-    }
+    pthread_join (ids[i], NULL);
   DEBUG_MSG ("Digest calculators canceled.");
   
   return (status);
@@ -293,7 +317,7 @@ configure_data_connection (connection_t * connection)
   DEBUG_MSG ("Connected data socket. Local port is %04x.", connection->local.sin_port);
   status_t status = run_session (connection);
   shutdown (connection->data_fd, SD_BOTH);
-  DEBUG_MSG ("Closed data socket.");
+  DEBUG_MSG ("Shutdown data socket.");
 
   return (status);
 }

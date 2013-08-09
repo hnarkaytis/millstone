@@ -17,45 +17,64 @@ queue_init (queue_t * queue, mr_rarray_t * array, size_t elem_size)
   queue->elem_size = elem_size;
   queue->count = array->size / elem_size;
   queue->used = 0;
+  queue->cancel = FALSE;
   memset (array->data, 0, array->size);
   pthread_mutex_init (&queue->mutex, NULL);
   pthread_cond_init (&queue->full, NULL);
   pthread_cond_init (&queue->empty, NULL);
 }
 
-void
+status_t
 queue_push (queue_t * queue, void * element)
 {
   char * array = queue->array->data;
 
   pthread_mutex_lock (&queue->mutex);
-  while (queue->used == queue->count)
+  while ((queue->used == queue->count) && (!queue->cancel))
     pthread_cond_wait (&queue->full, &queue->mutex);
-  
-  memcpy (&array[queue->head * queue->elem_size], element, queue->elem_size);
 
-  if (++queue->head == queue->count)
-    queue->head = 0;
-  if (queue->used++ == 0)
-    pthread_cond_broadcast (&queue->empty);
+  if (!queue->cancel)
+    {
+      memcpy (&array[queue->head * queue->elem_size], element, queue->elem_size);
+
+      if (++queue->head == queue->count)
+	queue->head = 0;
+      if (queue->used++ == 0)
+	pthread_cond_broadcast (&queue->empty);
+    }
   pthread_mutex_unlock (&queue->mutex);
+
+  return (queue->cancel ? ST_FAILURE : ST_SUCCESS);
 }
 
-void
+status_t
 queue_pop (queue_t * queue, void * element)
 {
   char * array = queue->array->data;
 
   pthread_mutex_lock (&queue->mutex);
-  while (queue->used == 0)
+  while ((queue->used == 0) && (!queue->cancel))
     pthread_cond_wait (&queue->empty, &queue->mutex);
+
+  if (!queue->cancel)
+    {
+      memcpy (element, &array[queue->tail * queue->elem_size], queue->elem_size);
   
-  memcpy (element, &array[queue->tail * queue->elem_size], queue->elem_size);
-  
-  if (++queue->tail == queue->count)
-    queue->tail = 0;
-  if (queue->used-- == queue->count)
-    pthread_cond_broadcast (&queue->full);
+      if (++queue->tail == queue->count)
+	queue->tail = 0;
+      if (queue->used-- == queue->count)
+	pthread_cond_broadcast (&queue->full);
+    }
+
   pthread_mutex_unlock (&queue->mutex);
+
+  return (queue->cancel ? ST_FAILURE : ST_SUCCESS);
 }
 
+void
+queue_cancel (queue_t * queue)
+{
+  queue->cancel = TRUE;
+  pthread_cond_broadcast (&queue->full);
+  pthread_cond_broadcast (&queue->empty);
+}

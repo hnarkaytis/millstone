@@ -100,40 +100,45 @@ addr_hash (const mr_ptr_t key, const void * context)
   return (addr->sin_addr.s_addr + 0xDeadBeef * addr->sin_port);
 }
 
-static void
+static status_t
 push_tip (server_t * server, queue_t * queue, void * item)
 {
   pthread_mutex_lock (&server->tip_mutex);
   ++server->tip;
   pthread_mutex_unlock (&server->tip_mutex);
-  queue_push (queue, item);
+  return (queue_push (queue, item));
 }
 
-static void
+static status_t
 push_msg (server_t * server, msg_t * msg)
 {
-  push_tip (server, &server->cmd_out.queue, msg);
+  return (push_tip (server, &server->cmd_out.queue, msg));
 }
 
-static void
+static status_t
 push_task (server_t * server, task_t * task)
 {
-  push_tip (server, &server->task_queue.queue, task);
+  return (push_tip (server, &server->task_queue.queue, task));
 }
 
-static void
+static status_t
 finish_tip (server_t * server)
 {
+  status_t status = ST_SUCCESS;
+  
   pthread_mutex_lock (&server->tip_mutex);
   --server->tip;
   pthread_mutex_unlock (&server->tip_mutex);
+  
   if (0 == server->tip)
     {
       msg_t msg;
       memset (&msg, 0, sizeof (msg));
       msg.msg_type = MT_TERMINATE;
-      push_msg (server, &msg);
+      status = push_msg (server, &msg);
     }
+  
+  return (status);
 }
 
 static status_t
@@ -151,7 +156,7 @@ block_matched (server_t * server, block_matched_t * block_matched)
       task.block_id = block_matched->block_id;
       task.size = block_matched->block_id.size / SPLIT_RATIO;
       DUMP_VAR (task_t, &task);
-      push_task (server, &task);
+      status = push_task (server, &task);
       DEBUG_MSG ("Task pushed to queue.");
     }
   else
@@ -163,7 +168,7 @@ block_matched (server_t * server, block_matched_t * block_matched)
       DUMP_VAR (msg_t, &msg);
       status = sync_storage_add (&server->data_blocks, offset_key (msg.msg_data.block_id.offset));
       if (ST_SUCCESS == status)
-	push_msg (server, &msg);
+	status = push_msg (server, &msg);
       DEBUG_MSG ("Mesasge pushed to queue with status %d.", status);
     }
   return (status);
@@ -172,6 +177,7 @@ block_matched (server_t * server, block_matched_t * block_matched)
 static status_t
 block_sent (server_t * server, block_id_t * block_id)
 {
+  status_t status = ST_SUCCESS;
   DEBUG_MSG ("Got confirmation for block %zd:%zd.", block_id->offset, block_id->size);
   if (NULL != sync_storage_find (&server->data_blocks, offset_key (block_id->offset)))
     {
@@ -180,10 +186,10 @@ block_sent (server_t * server, block_id_t * block_id)
       msg.msg_type = MT_BLOCK_REQUEST;
       msg.msg_data.block_id = *block_id;
       DEBUG_MSG ("Request block %zd:%zd once again.", block_id->offset, block_id->size);
-      push_msg (server, &msg);
+      status = push_msg (server, &msg);
       DEBUG_MSG ("Request for block %zd:%zd pushed to queue.", block_id->offset, block_id->size);
     }
-  return (ST_SUCCESS);
+  return (status);
 }
 
 static void *
@@ -200,7 +206,7 @@ server_cmd_reader (void * arg)
       if (ST_SUCCESS != status)
 	break;
 
-      DUMP_VAR (msg_t, & msg);
+      DUMP_VAR (msg_t, &msg);
       
       switch (msg.msg_type)
 	{
@@ -222,7 +228,9 @@ server_cmd_reader (void * arg)
       if (ST_SUCCESS != status)
 	break;
       
-      finish_tip (server);
+      status = finish_tip (server);
+      if (ST_SUCCESS != status)
+	break;
     }
   shutdown (server->connection->cmd_fd, SD_BOTH);
   DEBUG_MSG ("Exiting server command reader thread.");
@@ -241,7 +249,10 @@ server_worker (void * arg)
   memset (&msg, 0, sizeof (msg));
   for (;;)
     {
-      queue_pop (&server->task_queue.queue, &task);
+      status_t status = queue_pop (&server->task_queue.queue, &task);
+      if (ST_SUCCESS != status)
+	break;
+      
       DEBUG_MSG ("Server worker got task: offset:size %zd:%zd split on %zd.",
 		 task.block_id.offset, task.block_id.size, task.size);
       
@@ -252,16 +263,22 @@ server_worker (void * arg)
 	  msg.msg_data.block_id.offset = task.block_id.offset + offset;
 	  if (msg.msg_data.block_id.size > task.block_id.size - offset)
 	    msg.msg_data.block_id.size = task.block_id.size - offset;
-	  status_t status = calc_digest (&msg.msg_data.block_digest, server->connection->context->file_fd);
+	  
 	  DEBUG_MSG ("Calc digest for offset %zd status %d.", msg.msg_data.block_id.offset, status);
+	  status = calc_digest (&msg.msg_data.block_digest, server->connection->context->file_fd);
 	  if (ST_SUCCESS != status)
 	    break;
+	  
 	  DEBUG_MSG ("Pushing to outgoing queue digest for offset %zd.", msg.msg_data.block_id.offset);
-	  push_msg (server, &msg);
+	  status = push_msg (server, &msg);
+	  if (ST_SUCCESS != status)
+	    break;
 	  DEBUG_MSG ("Pushed digest for offset %zd.", msg.msg_data.block_id.offset);
 	}
-
-      finish_tip (server);
+      
+      status = finish_tip (server);
+      if (ST_SUCCESS != status)
+	break;
     }
   DEBUG_MSG ("Exiting server worker.");
   return (NULL);
@@ -270,26 +287,28 @@ server_worker (void * arg)
 static status_t
 server_cmd_writer (server_t * server)
 {
-  status_t status;
+  status_t status = ST_SUCCESS;
   msg_t msg;
 
-  DUMP_VAR (server_t, server);
   DEBUG_MSG ("Started server command writer.");
+  
   memset (&msg, 0, sizeof (msg));
   for (;;)
     {
-      queue_pop (&server->cmd_out.queue, &msg);
+      status = queue_pop (&server->cmd_out.queue, &msg);
+      if (ST_SUCCESS != status)
+	break;
+      
       DEBUG_MSG ("Write message type %d to client %08x:%04x.", msg.msg_type,
 		 server->connection->remote.sin_addr.s_addr, server->connection->remote.sin_port);
       DUMP_VAR (msg_t, &msg);
+      
       status = msg_send (server->connection->cmd_fd, &msg);
       if (status != ST_SUCCESS)
 	break;
+      
       if (MT_TERMINATE == msg.msg_type)
-	{
-	  DEBUG_MSG ("Terminating connection with client.");
-	  break;
-	}
+	break;
     }
   DEBUG_MSG ("Exiting server command writer.");
   return (status);
@@ -315,11 +334,10 @@ start_workers (server_t * server)
     status = server_cmd_writer (server);
 
   DEBUG_MSG ("Canceling server workers.");
+  queue_cancel (&server->task_queue.queue);
+  queue_cancel (&server->cmd_out.queue);
   for (--i ; i >= 0; --i)
-    {
-      pthread_cancel (ids[i]);
-      pthread_join (ids[i], NULL);
-    }
+    pthread_join (ids[i], NULL);
   DEBUG_MSG ("Server workers canceled.");
   
   return (status);
@@ -347,7 +365,9 @@ data_retrieval (void * arg)
       if (msg.msg_data.block_id.size > server->connection->context->size - offset)
 	msg.msg_data.block_id.size = server->connection->context->size - offset;
       DEBUG_MSG ("Push task to get block %zd:%zd.", msg.msg_data.block_id.offset, msg.msg_data.block_id.size);
-      push_msg (server, &msg);
+      status_t status = push_msg (server, &msg);
+      if (ST_SUCCESS != status)
+	break;
     }
 
   /* finish fake task-in-progress */
@@ -373,7 +393,7 @@ start_data_retrieval (server_t * server)
   status = server_cmd_writer (server);
 
   DEBUG_MSG ("Canceling data retrieval thread.");
-  pthread_cancel (id);
+  queue_cancel (&server->cmd_out.queue);
   pthread_join (id, NULL);
   DEBUG_MSG ("Data retrieval thread canceled.");
   return (status);
@@ -403,13 +423,15 @@ start_cmd_reader (server_t * server)
       task.block_id.size = server->connection->context->size;
       task.size = MAX_BLOCK_SIZE;
       DEBUG_MSG ("File on server exists. Push initial task.");
-      push_task (server, &task);
-      DEBUG_MSG ("Start workers.");
-      status = start_workers (server);
+      status = push_task (server, &task);
+      DEBUG_MSG ("Start workers with status %d.", status);
+      if (ST_SUCCESS == status)
+	status = start_workers (server);
     }
 
   DEBUG_MSG ("Canceling command reader thread.");
-  pthread_cancel (id);
+  queue_cancel (&server->cmd_out.queue);
+  queue_cancel (&server->task_queue.queue);
   pthread_join (id, NULL);
   DEBUG_MSG ("Command reader thread canceled.");
   
@@ -573,7 +595,7 @@ put_data_block (server_t * server, unsigned char * buf, int size)
   /* unregister block in registry */
   sync_storage_del (&server->data_blocks, offset_key (block_id->offset));
 
-  unsigned char * data = mmap64 (NULL, block_id->size, PROT_WRITE, MAP_PRIVATE,
+  unsigned char * data = mmap64 (NULL, block_id->size, PROT_WRITE, MAP_SHARED,
 				 server->connection->context->file_fd, block_id->offset);
   if (-1 == (long)data)
     FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));

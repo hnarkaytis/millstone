@@ -154,7 +154,9 @@ block_matched (server_t * server, block_matched_t * block_matched)
       task_t task;
       memset (&task, 0, sizeof (task));
       task.block_id = block_matched->block_id;
-      task.size = block_matched->block_id.size / SPLIT_RATIO;
+      for (task.size = MIN_BLOCK_SIZE;
+	   task.size * SPLIT_RATIO < block_matched->block_id.size;
+	   task.size *= SPLIT_RATIO);
       DUMP_VAR (task_t, &task);
       status = push_task (server, &task);
       DEBUG_MSG ("Task pushed to queue.");
@@ -348,23 +350,26 @@ data_retrieval (void * arg)
 {
   server_t * server = arg;
   msg_t msg;
-  off64_t offset;
+  block_id_t * block_id = &msg.msg_data.block_id;
   
   DEBUG_MSG ("Data retrieval thread has started.");
   memset (&msg, 0, sizeof (msg));
   msg.msg_type = MT_BLOCK_REQUEST;
-  msg.msg_data.block_id.size = MIN_BLOCK_SIZE;
+  block_id->size = MIN_BLOCK_SIZE;
 
   /* make a fake task-in-progress just to make sure that command reciever will not send MT_TERMINATE */
   pthread_mutex_lock (&server->tip_mutex);
   ++server->tip;
   pthread_mutex_unlock (&server->tip_mutex);
   
-  for (offset = 0; offset < server->connection->context->size; offset += msg.msg_data.block_id.size)
+  for (block_id->offset = 0;
+       block_id->offset < server->connection->context->size;
+       block_id->offset += block_id->size)
     {
-      if (msg.msg_data.block_id.size > server->connection->context->size - offset)
-	msg.msg_data.block_id.size = server->connection->context->size - offset;
-      DEBUG_MSG ("Push task to get block %zd:%zd.", msg.msg_data.block_id.offset, msg.msg_data.block_id.size);
+      if (block_id->size > server->connection->context->size - block_id->offset)
+	block_id->size = server->connection->context->size - block_id->offset;
+      
+      DEBUG_MSG ("Push task to get block %zd:%zd.", block_id->offset, block_id->size);
       status_t status = push_msg (server, &msg);
       if (ST_SUCCESS != status)
 	break;
@@ -693,6 +698,7 @@ run_server (config_t * config)
 {
   server_ctx_t server_ctx;
 
+  DEBUG_MSG ("Start server.");
   memset (&server_ctx, 0, sizeof (server_ctx));
   server_ctx.config = config;
   

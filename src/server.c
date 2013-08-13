@@ -169,23 +169,28 @@ copy_duplicate (server_t * server, block_matched_t * block_matched)
     {
       unsigned char * src = mmap64 (NULL, block_matched->duplicate_block_id.size, PROT_WRITE, MAP_SHARED,
 				     server->connection->context->file_fd, block_matched->duplicate_block_id.offset);
-      unsigned char * dst = mmap64 (NULL, block_matched->block_id.size, PROT_WRITE, MAP_SHARED,
-				     server->connection->context->file_fd, block_matched->block_id.offset);
-      if ((-1 == (long)src) || (-1 == (long)dst))
-	{
-	  FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
-	  status = ST_FAILURE;
-	}
-      else
-	{
-	  memcpy (dst, src, block_matched->block_id.size);
-	  status = ST_SUCCESS;
-	}
+      status = ST_FAILURE;
       
-      if (-1 != (long)src)
-	munmap (src, block_matched->block_id.size);
-      if (-1 != (long)dst)
-	munmap (dst, block_matched->duplicate_block_id.size);
+      if (-1 == (long)src)
+	FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+      else
+	{      
+	  unsigned char * dst = mmap64 (NULL, block_matched->block_id.size, PROT_WRITE, MAP_SHARED,
+					server->connection->context->file_fd, block_matched->block_id.offset);
+	  if (-1 == (long)dst)
+	    FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+	  else
+	    {
+	      memcpy (dst, src, block_matched->block_id.size);
+	      if (0 != munmap (dst, block_matched->block_id.size))
+		FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+	      else
+		status = ST_SUCCESS;
+	    }
+	  
+	  if (0 != munmap (src, block_matched->duplicate_block_id.size))
+	    FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+	}
     }
   
   return (status);

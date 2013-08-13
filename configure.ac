@@ -5,7 +5,7 @@ AC_PREREQ([2.69])
 AC_INIT([Millstone - rsync for binary files], [0.1], [hnarkaytis@gmail.com])
 AM_INIT_AUTOMAKE([millstone], [1.0])
 AC_CONFIG_SRCDIR([src/millstone.c])
-AC_CONFIG_HEADERS([config.h])
+AC_CONFIG_HEADERS([src/config.h])
 
 # Checks for programs.
 AC_PROG_CC
@@ -23,7 +23,7 @@ if test x${HAVE_LIBXML2} = xyes ; then
   AC_DEFINE(HAVE_LIBXML2, [], [define if libxml2 is present])
 fi
 
-AC_ARG_ENABLE(compile-log-level, [  --enable-compile-log-level		set compile time log level], COMPILE_LOG_LEVEL=$enableval, COMPILE_LOG_LEVEL=ALL)
+AC_ARG_ENABLE(compile-log-level, [  --enable-compile-log-level		set compile time log level], COMPILE_LOG_LEVEL=$enableval, COMPILE_LOG_LEVEL=OFF)
 AC_MSG_CHECKING(compile time log level)
 AC_MSG_RESULT(${COMPILE_LOG_LEVEL})
 if test x${COMPILE_LOG_LEVEL} = xALL; then

@@ -4,6 +4,8 @@
 /TAGS
 /calc_digest.o
 /client.o
+/config.h
+/config.h.in
 /file_meta.o
 /logging.o
 /millstone
@@ -11,4 +13,5 @@
 /msg.o
 /queue.o
 /server.o
+/stamp-h1
 /sync_storage.o

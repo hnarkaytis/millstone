@@ -157,6 +157,41 @@ send_block_request (server_t * server, block_id_t * block_id)
 }
 
 static status_t
+copy_duplicate (server_t * server, block_matched_t * block_matched)
+{
+  status_t status;
+  
+  if ((block_matched->block_id.size != block_matched->duplicate_block_id.size) ||
+      (NULL != sync_storage_find (&server->data_blocks,
+				  offset_key (block_matched->duplicate_block_id.offset))))
+    status = send_block_request (server, &block_matched->block_id);
+  else
+    {
+      unsigned char * src = mmap64 (NULL, block_matched->duplicate_block_id.size, PROT_WRITE, MAP_SHARED,
+				     server->connection->context->file_fd, block_matched->duplicate_block_id.offset);
+      unsigned char * dst = mmap64 (NULL, block_matched->block_id.size, PROT_WRITE, MAP_SHARED,
+				     server->connection->context->file_fd, block_matched->block_id.offset);
+      if ((-1 == (long)src) || (-1 == (long)dst))
+	{
+	  FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+	  status = ST_FAILURE;
+	}
+      else
+	{
+	  memcpy (dst, src, block_matched->block_id.size);
+	  status = ST_SUCCESS;
+	}
+      
+      if (-1 != (long)src)
+	munmap (src, block_matched->block_id.size);
+      if (-1 != (long)dst)
+	munmap (dst, block_matched->duplicate_block_id.size);
+    }
+  
+  return (status);
+}
+
+static status_t
 block_matched (server_t * server, block_matched_t * block_matched)
 {
   status_t status = ST_SUCCESS;
@@ -164,7 +199,14 @@ block_matched (server_t * server, block_matched_t * block_matched)
   if (block_matched->matched)
     return (status);
   
-  if (block_matched->block_id.size > MIN_BLOCK_SIZE)
+  if (block_matched->block_id.size <= MIN_BLOCK_SIZE)
+    {
+      if (block_matched->duplicate)
+	status = copy_duplicate (server, block_matched);
+      else
+	status = send_block_request (server, &block_matched->block_id);
+    }
+  else
     {
       task_t task;
       memset (&task, 0, sizeof (task));
@@ -176,8 +218,6 @@ block_matched (server_t * server, block_matched_t * block_matched)
       status = push_task (server, &task);
       DEBUG_MSG ("Task pushed to queue.");
     }
-  else
-    status = send_block_request (server, &block_matched->block_id);
   return (status);
 }
 

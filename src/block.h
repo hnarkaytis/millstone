@@ -18,14 +18,16 @@ TYPEDEF_STRUCT (block_id_t,
 		(off64_t, offset),
 		)
 
-TYPEDEF_STRUCT (block_digest_t,
+TYPEDEF_STRUCT (block_digest_t, ATTRIBUTES (__attribute__ ((packed))),
 		(block_id_t, block_id),
 		(uint32_t, digest, [(SHA_DIGEST_LENGTH + sizeof (uint32_t) - 1) / sizeof (uint32_t)]),
 		)
 
-TYPEDEF_STRUCT (block_matched_t,
+TYPEDEF_STRUCT (block_matched_t, ATTRIBUTES (__attribute__ ((packed))),
 		(block_id_t, block_id),
-		(bool, matched),
+		(block_id_t, duplicate_block_id),
+		BITFIELD (bool, matched, :1),
+		BITFIELD (bool, duplicate, :1),
 		)
 
 #endif /* _BLOCK_H_ */

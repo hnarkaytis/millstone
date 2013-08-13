@@ -18,12 +18,31 @@
 
 #include <pthread.h>
 
+#include <metaresc.h>
+#include <mr_ic.h>
+
 TYPEDEF_STRUCT (client_t,
 		(connection_t *, connection),
+		(mr_ic_t, sent_blocks),
 		(msg_queue_t, data_in),
 		(msg_queue_t, cmd_in),
 		(msg_queue_t, cmd_out),
 		)
+
+static mr_hash_value_t
+block_digest_hash (const mr_ptr_t key, const void * context)
+{
+  block_digest_t * block_digest = key.ptr;
+  return (*((mr_hash_value_t*)(block_digest->digest)));
+}
+
+static int
+block_digest_cmp (const mr_ptr_t x, const mr_ptr_t y, const void * context)
+{
+  block_digest_t * x_block_digest = x.ptr;
+  block_digest_t * y_block_digest = y.ptr;
+  return (memcmp (x_block_digest->digest, y_block_digest->digest, sizeof (x_block_digest->digest)));
+}
 
 static status_t
 send_block (client_t * client, block_id_t * block_id)
@@ -125,10 +144,13 @@ digest_calculator (void * arg)
 {
   client_t * client = arg;
   block_digest_t block_digest;
+  block_digest_t * allocated_block_digest = NULL;
   msg_t msg;
 
   DEBUG_MSG ("Entered digest calculator.");
+
   memset (&block_digest, 0, sizeof (block_digest));
+  
   for (;;)
     {
       status_t status = queue_pop (&client->cmd_in.queue, &msg);
@@ -146,6 +168,26 @@ digest_calculator (void * arg)
 	{
 	  msg.msg_type = MT_BLOCK_MATCHED;
 	  msg.msg_data.block_matched.matched = !memcmp (block_digest.digest, msg.msg_data.block_digest.digest, sizeof (block_digest.digest));
+	  msg.msg_data.block_matched.duplicate = FALSE;
+	  
+	  if (allocated_block_digest == NULL)
+	    allocated_block_digest = MR_MALLOC (sizeof (*allocated_block_digest));
+	  if (allocated_block_digest != NULL)
+	    {
+	      *allocated_block_digest = block_digest;
+	      mr_ptr_t * find = mr_ic_add (&client->sent_blocks, allocated_block_digest, NULL);
+	      if (find != NULL)
+		{
+		  block_digest_t * matched_block_digest = find->ptr;
+		  bool duplicate = (matched_block_digest != allocated_block_digest);
+		  
+		  if (!duplicate)
+		    allocated_block_digest = NULL;
+		  
+		  msg.msg_data.block_matched.duplicate = duplicate;
+		  msg.msg_data.block_matched.duplicate_block_id = matched_block_digest->block_id;
+		}
+	    }
 	}
       
       DEBUG_MSG ("Push message:");
@@ -155,6 +197,9 @@ digest_calculator (void * arg)
 	break;
       DEBUG_MSG ("Message pushed.");
     }
+
+  if (allocated_block_digest != NULL)
+    MR_FREE (allocated_block_digest);
 
   DEBUG_MSG ("Exiting digest calculator.");
   return (NULL);
@@ -274,6 +319,13 @@ start_digest_calculators (client_t * client)
   return (status);
 }
 
+static mr_status_t
+free_sent_blocks (mr_ptr_t node, const void * context)
+{
+  MR_FREE (node.ptr);
+  return (MR_SUCCESS);
+}
+
 static status_t
 run_session (connection_t * connection)
 {
@@ -284,7 +336,7 @@ run_session (connection_t * connection)
 
   memset (&client, 0, sizeof (client));
   client.connection = connection;
-  
+
   DEBUG_MSG ("Sending file meata data.");
   status_t status = send_file_meta (connection);
   if (ST_SUCCESS != status)
@@ -294,8 +346,15 @@ run_session (connection_t * connection)
   MSG_QUEUE_INIT (&client.cmd_in, cmd_in_array_data);
   MSG_QUEUE_INIT (&client.data_in, data_in_array_data);
 
+  mr_status_t mr_status = mr_ic_new (&client.sent_blocks, block_digest_hash, block_digest_cmp, "block_digest_t", MR_IC_HASH);
+
   DEBUG_MSG ("Session inited.");
-  status = start_digest_calculators (&client);
+  if (MR_SUCCESS == mr_status)
+    {
+      status = start_digest_calculators (&client);
+      mr_ic_foreach (&client.sent_blocks, free_sent_blocks, NULL);
+      mr_ic_free (&client.sent_blocks, NULL);
+    }
   DEBUG_MSG ("Session done.");
 
   return (status);

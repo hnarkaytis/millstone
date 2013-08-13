@@ -1,7 +1,7 @@
 #ifndef LOGGING_H
 #define LOGGING_H
 
-#ifdef HAVE_CONFIG
+#ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif /* HAVE_CONFIG */
 

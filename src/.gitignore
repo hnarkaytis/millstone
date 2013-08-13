@@ -6,6 +6,7 @@
 /client.o
 /config.h
 /config.h.in
+/config.h.in~
 /file_meta.o
 /logging.o
 /millstone

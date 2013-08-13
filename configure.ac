@@ -23,6 +23,34 @@ if test x${HAVE_LIBXML2} = xyes ; then
   AC_DEFINE(HAVE_LIBXML2, [], [define if libxml2 is present])
 fi
 
+AC_ARG_ENABLE(compile-log-level, [  --enable-compile-log-level		set compile time log level], LOG_LEVEL=$enableval, LOG_LEVEL=ALL)
+AC_MSG_CHECKING(compile time log level)
+AC_MSG_RESULT(${LOG_LEVEL})
+if test x${LOG_LEVEL} = xALL; then
+  AC_DEFINE_UNQUOTED(COMPILE_LOG_LEVEL_LL_ALL, , [Compile log level])
+fi
+if test x${LOG_LEVEL} = xTRACE; then
+  AC_DEFINE_UNQUOTED(COMPILE_LOG_LEVEL_LL_TRACE, , [Compile log level])
+fi
+if test x${LOG_LEVEL} = xDEBUG; then
+  AC_DEFINE_UNQUOTED(COMPILE_LOG_LEVEL_LL_DEBUG, , [Compile log level])
+fi
+if test x${LOG_LEVEL} = xINFO; then
+  AC_DEFINE_UNQUOTED(COMPILE_LOG_LEVEL_LL_INFO, , [Compile log level])
+fi
+if test x${LOG_LEVEL} = xWARN; then
+  AC_DEFINE_UNQUOTED(COMPILE_LOG_LEVEL_LL_WARN, , [Compile log level])
+fi
+if test x${LOG_LEVEL} = xERROR; then
+  AC_DEFINE_UNQUOTED(COMPILE_LOG_LEVEL_LL_ERROR, , [Compile log level])
+fi
+if test x${LOG_LEVEL} = xFATAL; then
+  AC_DEFINE_UNQUOTED(COMPILE_LOG_LEVEL_LL_FATAL, , [Compile log level])
+fi
+if test x${LOG_LEVEL} = xOFF; then
+  AC_DEFINE_UNQUOTED(COMPILE_LOG_LEVEL_LL_OFF, , [Compile log level])
+fi
+
 # Checks for library functions.
 AC_FUNC_ALLOCA
 AC_FUNC_MALLOC

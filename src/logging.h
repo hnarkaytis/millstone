@@ -1,8 +1,15 @@
 #ifndef LOGGING_H
 #define LOGGING_H
 
+#ifdef HAVE_CONFIG
+#include <config.h>
+#endif /* HAVE_CONFIG */
+
 #define DEFAULT_LOG_LEVEL (LL_INFO)
+
+#if !defined (COMPILE_LOG_LEVEL_LL_ALL) && !defined (COMPILE_LOG_LEVEL_LL_TRACE) && !defined (COMPILE_LOG_LEVEL_LL_DEBUG) && !defined (COMPILE_LOG_LEVEL_LL_INFO) && !defined (COMPILE_LOG_LEVEL_LL_WARN) && !defined (COMPILE_LOG_LEVEL_LL_ERROR) && !defined (COMPILE_LOG_LEVEL_LL_FATAL) && !defined (COMPILE_LOG_LEVEL_LL_OFF)
 #define COMPILE_LOG_LEVEL_LL_OFF
+#endif /* COMPILE_LOG_LEVEL_LL_XXX */
 
 #include <metaresc.h>
 

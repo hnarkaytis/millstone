@@ -12,6 +12,7 @@
 #include <string.h> /* memset, setlen, strerror */
 #include <netdb.h> /* gethostbyname */
 #include <netinet/in.h> /* htonl, struct sockaddr_in */
+#include <sys/sysinfo.h> /* _SC_NPROCESSORS_ONLN */
 #include <sys/mman.h> /* mmap64, unmap */
 #include <sys/uio.h> /* writev, struct iovec */
 #include <sys/socket.h> /* socket, shutdown, connect */
@@ -24,6 +25,7 @@
 TYPEDEF_STRUCT (client_t,
 		(connection_t *, connection),
 		(mr_ic_t, sent_blocks),
+		(pthread_mutex_t, sent_blocks_lock),
 		(msg_queue_t, data_in),
 		(msg_queue_t, cmd_in),
 		(msg_queue_t, cmd_out),
@@ -145,6 +147,7 @@ digest_calculator (void * arg)
   client_t * client = arg;
   block_digest_t block_digest;
   block_digest_t * allocated_block_digest = NULL;
+  long phys_pages = sysconf (_SC_PHYS_PAGES);
   msg_t msg;
 
   DEBUG_MSG ("Entered digest calculator.");
@@ -166,26 +169,32 @@ digest_calculator (void * arg)
 	msg.msg_type = MT_BLOCK_SEND_ERROR;
       else
 	{
+	  long avphys_pages = sysconf (_SC_AVPHYS_PAGES);
 	  msg.msg_type = MT_BLOCK_MATCHED;
 	  msg.msg_data.block_matched.matched = !memcmp (block_digest.digest, msg.msg_data.block_digest.digest, sizeof (block_digest.digest));
 	  msg.msg_data.block_matched.duplicate = FALSE;
-	  
-	  if (allocated_block_digest == NULL)
-	    allocated_block_digest = MR_MALLOC (sizeof (*allocated_block_digest));
-	  if (allocated_block_digest != NULL)
+
+	  if (avphys_pages > phys_pages * client->connection->context->config->mem_threshold / 100)
 	    {
-	      *allocated_block_digest = block_digest;
-	      mr_ptr_t * find = mr_ic_add (&client->sent_blocks, allocated_block_digest, NULL);
-	      if (find != NULL)
+	      if (allocated_block_digest == NULL)
+		allocated_block_digest = MR_MALLOC (sizeof (*allocated_block_digest));
+	      if (allocated_block_digest != NULL)
 		{
-		  block_digest_t * matched_block_digest = find->ptr;
-		  bool duplicate = (matched_block_digest != allocated_block_digest);
+		  *allocated_block_digest = block_digest;
+		  pthread_mutex_lock (&client->sent_blocks_lock);
+		  mr_ptr_t * find = mr_ic_add (&client->sent_blocks, allocated_block_digest, NULL);
+		  pthread_mutex_unlock (&client->sent_blocks_lock);
+		  if (find != NULL)
+		    {
+		      block_digest_t * matched_block_digest = find->ptr;
+		      bool duplicate = (matched_block_digest != allocated_block_digest);
 		  
-		  if (!duplicate)
-		    allocated_block_digest = NULL;
+		      if (!duplicate)
+			allocated_block_digest = NULL;
 		  
-		  msg.msg_data.block_matched.duplicate = duplicate;
-		  msg.msg_data.block_matched.duplicate_block_id = matched_block_digest->block_id;
+		      msg.msg_data.block_matched.duplicate = duplicate;
+		      msg.msg_data.block_matched.duplicate_block_id = matched_block_digest->block_id;
+		    }
 		}
 	    }
 	}
@@ -346,14 +355,18 @@ run_session (connection_t * connection)
   MSG_QUEUE_INIT (&client.cmd_in, cmd_in_array_data);
   MSG_QUEUE_INIT (&client.data_in, data_in_array_data);
 
+  pthread_mutex_init (&client.sent_blocks_lock, NULL);
   mr_status_t mr_status = mr_ic_new (&client.sent_blocks, block_digest_hash, block_digest_cmp, "block_digest_t", MR_IC_HASH);
 
   DEBUG_MSG ("Session inited.");
   if (MR_SUCCESS == mr_status)
     {
       status = start_digest_calculators (&client);
+      
+      pthread_mutex_lock (&client.sent_blocks_lock);
       mr_ic_foreach (&client.sent_blocks, free_sent_blocks, NULL);
       mr_ic_free (&client.sent_blocks, NULL);
+      pthread_mutex_unlock (&client.sent_blocks_lock);
     }
   DEBUG_MSG ("Session done.");
 

@@ -30,6 +30,7 @@ TYPEDEF_STRUCT (config_t,
 		string_t dst_host,
 		int dst_port,
 		int listen_port,
+		int mem_threshold,
 		)
 
 TYPEDEF_STRUCT (context_t,

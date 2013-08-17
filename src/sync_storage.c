@@ -65,9 +65,16 @@ sync_storage_init (sync_storage_t * sync_storage, mr_compar_fn_t compar_fn, mr_h
 }
 
 void
+dummy_free_fn (mr_ptr_t key, const void * context)
+{
+}
+
+void
 sync_storage_free (sync_storage_t * sync_storage, mr_free_fn_t free_fn)
 {
   int i;
+  if (NULL == free_fn)
+    free_fn = dummy_free_fn;
   for (i = 0; i < sizeof (sync_storage->table) / sizeof (sync_storage->table[0]); ++i)
     {
       pthread_mutex_lock (&sync_storage->table[i].mutex);

@@ -406,7 +406,6 @@ data_retrieval (void * arg)
     {
       if (block_id.size > server->connection->context->size - block_id.offset)
 	block_id.size = server->connection->context->size - block_id.offset;
-      
       status_t status = send_block_request (server, &block_id);
       if (ST_SUCCESS != status)
 	break;

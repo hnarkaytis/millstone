@@ -3,9 +3,12 @@
 #include <client.h>
 #include <server.h>
 
+#include <unistd.h>
 #include <stdlib.h> /* EXIT_*, strtol */
 #include <string.h> /* memset, strchr */
 #include <getopt.h> /* getopt_long */
+
+#define DEFAULT_MEM_THRESHOLD (5)
 
 static status_t
 parse_args (int argc, char * argv[], config_t * config)
@@ -24,6 +27,7 @@ parse_args (int argc, char * argv[], config_t * config)
   memset (config, 0, sizeof (*config));
   config->listen_port = DEFAULT_LISTEN_PORT;
   config->dst_port = DEFAULT_LISTEN_PORT;
+  config->mem_threshold = DEFAULT_MEM_THRESHOLD;
   
   while ((c = getopt_long (argc, argv, "cl:", long_options, &option_index)) != -1)
     switch (c)

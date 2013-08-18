@@ -1,3 +1,6 @@
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif /* HAVE_CONFIG_H */
 #include <millstone.h>
 #include <logging.h>
 #include <block.h>
@@ -17,6 +20,9 @@
 #include <sys/mman.h> /* mmap64, unmap */
 
 #include <pthread.h>
+#ifdef HAVE_ZLIB
+#include <zlib.h>
+#endif /* HAVE_ZLIB */
 
 #define DATA_READERS (4)
 
@@ -93,6 +99,22 @@ addr_hash (const mr_ptr_t key, const void * context)
 }
 
 static status_t
+push_task (server_t * server, task_t * task)
+{
+  pthread_mutex_lock (&server->tip_mutex);
+  ++server->tip;
+  pthread_mutex_unlock (&server->tip_mutex);
+  status_t status = task_queue_push (&server->task_queue, task);
+  if (ST_SUCCESS != status)
+    {
+      pthread_mutex_lock (&server->tip_mutex);
+      --server->tip;
+      pthread_mutex_unlock (&server->tip_mutex);
+    }
+  return (status);
+}
+
+static status_t
 msg_push (server_t * server, msg_t * msg)
 {
   pthread_mutex_lock (&server->tip_mutex);
@@ -126,15 +148,6 @@ finish_tip (server_t * server)
     }
   
   return (status);
-}
-
-static status_t
-push_task (server_t * server, task_t * task)
-{
-  pthread_mutex_lock (&server->tip_mutex);
-  ++server->tip;
-  pthread_mutex_unlock (&server->tip_mutex);
-  return (task_queue_push (&server->task_queue, task));
 }
 
 static status_t
@@ -616,16 +629,11 @@ create_server_socket (server_ctx_t * server_ctx)
 static status_t
 put_data_block (server_t * server, unsigned char * buf, int size)
 {
-  status_t status = ST_FAILURE;
+  status_t status = ST_SUCCESS;
   block_id_t * block_id = (block_id_t *)buf;
   if (size < sizeof (*block_id))
     {
       ERROR_MSG ("Recieved block is too small.");
-      return (ST_FAILURE);
-    }
-  if (block_id->size + sizeof (*block_id) != size)
-    {
-      ERROR_MSG ("Packet size mismatched header info.");
       return (ST_FAILURE);
     }
 
@@ -636,14 +644,26 @@ put_data_block (server_t * server, unsigned char * buf, int size)
   unsigned char * data = mmap64 (NULL, block_id->size, PROT_WRITE, MAP_SHARED,
 				 server->connection->context->file_fd, block_id->offset);
   if (-1 == (long)data)
-    FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+    {
+      FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+      return (ST_FAILURE);
+    }
   else
     {
+#ifdef HAVE_ZLIB
+      uLong length = block_id->size;
+      int z_status = uncompress (data, &length, &buf[sizeof (*block_id)], size - sizeof (*block_id));
+
+      if (Z_OK != z_status)
+	status = ST_FAILURE;
+#else /* HAVE_ZLIB */
       memcpy (data, &buf[sizeof (*block_id)], block_id->size);
+#endif /* HAVE_ZLIB */
       if (0 != munmap (data, block_id->size))
-	ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
-      else
-	status = ST_SUCCESS;
+	{
+	  ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
+	  status = ST_FAILURE;
+	}
     }
   DEBUG_MSG ("Write block done.");
   

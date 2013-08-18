@@ -1,3 +1,6 @@
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif /* HAVE_CONFIG_H */
 #include <millstone.h>
 #include <logging.h>
 #include <block.h>
@@ -19,6 +22,9 @@
 #include <sys/socket.h> /* socket, shutdown, connect */
 
 #include <pthread.h>
+#ifdef HAVE_ZLIB
+#include <zlib.h>
+#endif /* HAVE_ZLIB */
 
 #include <metaresc.h>
 #include <mr_ic.h>
@@ -50,6 +56,7 @@ block_digest_cmp (const mr_ptr_t x, const mr_ptr_t y, const void * context)
 static status_t
 send_block (client_t * client, block_id_t * block_id)
 {
+  status_t status = ST_SUCCESS;
   DUMP_VAR (block_id_t, block_id);
   unsigned char * data = mmap64 (NULL, block_id->size, PROT_READ, MAP_PRIVATE,
 				 client->connection->context->file_fd, block_id->offset);
@@ -58,26 +65,41 @@ send_block (client_t * client, block_id_t * block_id)
       FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
       return (ST_FAILURE);
     }
-  
-  const struct iovec iov[] = {
-    { .iov_len = sizeof (*block_id), .iov_base = block_id },
-    { .iov_len = block_id->size, .iov_base = data },
-  };
 
-  ssize_t rv = TEMP_FAILURE_RETRY (writev (client->connection->data_fd, iov, sizeof (iov) / sizeof (iov[0])));
-  ssize_t i, len = 0;
-  for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
-    len += iov[i].iov_len;
+#ifdef HAVE_ZLIB
+  Byte buffer[block_id->size << 1];
+  uLongf length = sizeof (buffer);
+  int z_status = compress2 (buffer, &length, data, block_id->size, Z_BEST_COMPRESSION);
 
-  DEBUG_MSG ("Wrote packet of %zd bytes. Expected to write %zd.", rv, len);
+  if (Z_OK != z_status)
+    status = ST_FAILURE;
+#endif /* HAVE_ZLIB */
 
-  status_t status = ST_SUCCESS;
-  if (rv != len)
+  if (ST_SUCCESS == status)
     {
-      ERROR_MSG ("Failed to send data block (sent %d bytes, but expexted %d bytes)", rv, len);
-      status = ST_FAILURE;
-    }
+      const struct iovec iov[] = {
+	{ .iov_len = sizeof (*block_id), .iov_base = block_id },
+#ifdef HAVE_ZLIB
+	{ .iov_len = length, .iov_base = buffer },
+#else /* HAVE_ZLIB */
+	{ .iov_len = block_id->size, .iov_base = data },
+#endif /* HAVE_ZLIB */
+      };
 
+      ssize_t rv = TEMP_FAILURE_RETRY (writev (client->connection->data_fd, iov, sizeof (iov) / sizeof (iov[0])));
+      ssize_t i, len = 0;
+      for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
+	len += iov[i].iov_len;
+
+      DEBUG_MSG ("Wrote packet of %zd bytes. Expected to write %zd.", rv, len);
+
+      if (rv != len)
+	{
+	  ERROR_MSG ("Failed to send data block (sent %d bytes, but expexted %d bytes)", rv, len);
+	  status = ST_FAILURE;
+	}
+    }
+  
   if (0 != munmap (data, block_id->size))
     {
       ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
@@ -257,21 +279,27 @@ client_cmd_reader (client_t * client)
 static status_t
 start_data_writer (client_t * client)
 {
-  pthread_t id;
-  int rv = pthread_create (&id, NULL, client_data_writer, client);
-  if (rv != 0)
+  int i, ncpu = (long) sysconf (_SC_NPROCESSORS_ONLN);
+  pthread_t ids[ncpu];
+  status_t status = ST_FAILURE;
+
+  DEBUG_MSG ("Start server workers %d.", ncpu);
+  for (i = 0; i < ncpu; ++i)
     {
-      ERROR_MSG ("Failed to start command writer thread");
-      return (ST_FAILURE);
+      int rv = pthread_create (&ids[i], NULL, client_data_writer, client);
+      if (rv != 0)
+	break;
     }
 
-  DEBUG_MSG ("Started data writer %d.", rv);
-  status_t status = client_cmd_reader (client);
-  
+  DEBUG_MSG ("Started %d.", i);
+  if (i > 0)
+    status = client_cmd_reader (client);
+
   DEBUG_MSG ("Canceling data writer.");
   queue_cancel (&client->data_in.queue);
   queue_cancel (&client->cmd_out.queue);
-  pthread_join (id, NULL);
+  for (--i ; i >= 0; --i)
+    pthread_join (ids[i], NULL);
   DEBUG_MSG ("Command data canceled.");
 
   return (status);

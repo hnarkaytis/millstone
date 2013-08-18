@@ -69,6 +69,7 @@ task_queue_cancel (task_queue_t * task_queue)
       slot->prev->next = &task_queue->queue;
       task_queue->queue.prev = slot->prev;
       MR_FREE (slot);
+      --task_queue->count;
     }
   pthread_mutex_unlock (&task_queue->mutex);
 }

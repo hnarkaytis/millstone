@@ -6,8 +6,10 @@
 #include <msg.h>
 #include <calc_digest.h>
 #include <sync_storage.h>
+#include <task_queue.h>
 #include <server.h>
 
+#include <stddef.h> /* size_t, ssize_t */
 #include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close, ftruncate64 */
 #include <string.h> /* memcpy, strerror */
 #include <errno.h> /* errno */
@@ -21,16 +23,6 @@
 #define SPLIT_RATIO (128)
 #define MIN_BLOCK_SIZE (PAGE_SIZE)
 #define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO * SPLIT_RATIO)
-
-TYPEDEF_STRUCT (task_t,
-		(block_id_t, block_id),
-		(size_t, size),
-		)
-
-TYPEDEF_STRUCT (task_queue_t,
-		(queue_t, queue),
-		RARRAY (task_t, array),
-		)
 
 TYPEDEF_STRUCT (server_ctx_t,
 		(config_t *, config),
@@ -101,24 +93,19 @@ addr_hash (const mr_ptr_t key, const void * context)
 }
 
 static status_t
-push_tip (server_t * server, queue_t * queue, void * item)
+msg_push (server_t * server, msg_t * msg)
 {
   pthread_mutex_lock (&server->tip_mutex);
   ++server->tip;
   pthread_mutex_unlock (&server->tip_mutex);
-  return (queue_push (queue, item));
-}
-
-static status_t
-push_msg (server_t * server, msg_t * msg)
-{
-  return (push_tip (server, &server->cmd_out.queue, msg));
-}
-
-static status_t
-push_task (server_t * server, task_t * task)
-{
-  return (push_tip (server, &server->task_queue.queue, task));
+  status_t status = queue_push (&server->cmd_out.queue, msg);
+  if (ST_SUCCESS != status)
+    {
+      pthread_mutex_lock (&server->tip_mutex);
+      --server->tip;
+      pthread_mutex_unlock (&server->tip_mutex);
+    }
+  return (status);
 }
 
 static status_t
@@ -135,10 +122,19 @@ finish_tip (server_t * server)
       msg_t msg;
       memset (&msg, 0, sizeof (msg));
       msg.msg_type = MT_TERMINATE;
-      status = push_msg (server, &msg);
+      status = msg_push (server, &msg);
     }
   
   return (status);
+}
+
+static status_t
+push_task (server_t * server, task_t * task)
+{
+  pthread_mutex_lock (&server->tip_mutex);
+  ++server->tip;
+  pthread_mutex_unlock (&server->tip_mutex);
+  return (task_queue_push (&server->task_queue, task));
 }
 
 static status_t
@@ -151,7 +147,7 @@ send_block_request (server_t * server, block_id_t * block_id)
   DUMP_VAR (msg_t, &msg);
   status_t status = sync_storage_add (&server->data_blocks, offset_key (msg.msg_data.block_id.offset));
   if (ST_SUCCESS == status)
-    status = push_msg (server, &msg);
+    status = msg_push (server, &msg);
   DEBUG_MSG ("Mesasge pushed to queue with status %d.", status);
   return (status);
 }
@@ -291,7 +287,7 @@ server_worker (void * arg)
   memset (&msg, 0, sizeof (msg));
   for (;;)
     {
-      status_t status = queue_pop (&server->task_queue.queue, &task);
+      status_t status = task_queue_pop (&server->task_queue, &task);
       if (ST_SUCCESS != status)
 	break;
       
@@ -312,7 +308,7 @@ server_worker (void * arg)
 	    break;
 	  
 	  DEBUG_MSG ("Pushing to outgoing queue digest for offset %zd.", msg.msg_data.block_id.offset);
-	  status = push_msg (server, &msg);
+	  status = msg_push (server, &msg);
 	  if (ST_SUCCESS != status)
 	    break;
 	  DEBUG_MSG ("Pushed digest for offset %zd.", msg.msg_data.block_id.offset);
@@ -376,7 +372,7 @@ start_workers (server_t * server)
     status = server_cmd_writer (server);
 
   DEBUG_MSG ("Canceling server workers.");
-  queue_cancel (&server->task_queue.queue);
+  task_queue_cancel (&server->task_queue);
   queue_cancel (&server->cmd_out.queue);
   for (--i ; i >= 0; --i)
     pthread_join (ids[i], NULL);
@@ -472,7 +468,7 @@ start_cmd_reader (server_t * server)
 
   DEBUG_MSG ("Canceling command reader thread.");
   queue_cancel (&server->cmd_out.queue);
-  queue_cancel (&server->task_queue.queue);
+  task_queue_cancel (&server->task_queue);
   pthread_join (id, NULL);
   DEBUG_MSG ("Command reader thread canceled.");
   
@@ -507,11 +503,7 @@ handle_client (void * arg)
   msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
   MSG_QUEUE_INIT (&server.cmd_out, cmd_out_array_data);
 
-  task_t task_array_data[MSG_OUT_QUEUE_SIZE + MSG_IN_QUEUE_SIZE];
-  server.task_queue.array.data = task_array_data;
-  server.task_queue.array.size = sizeof (task_array_data);
-  server.task_queue.array.alloc_size = -1;
-  queue_init (&server.task_queue.queue, (mr_rarray_t*)&server.task_queue.array, sizeof (server.task_queue.array.data[0]));
+  task_queue_init (&server.task_queue);
 
   DEBUG_MSG ("Context for new client inited. Read file meta from client.");
   status_t status = read_file_meta (&connection); /* reads UDP port of remote into connection_t and opens file for write */
@@ -528,6 +520,8 @@ handle_client (void * arg)
   shutdown (accepter_ctx.fd, SD_BOTH);
   close (accepter_ctx.fd);
 
+  task_queue_cancel (&server.task_queue); /* free allocated slots */
+  
   sync_storage_free (&server.data_blocks, NULL);
   
   DEBUG_MSG ("Closed connection to client: %08x:%04x.", accepter_ctx.remote.sin_addr.s_addr, accepter_ctx.remote.sin_port);

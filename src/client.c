@@ -6,6 +6,7 @@
 #include <calc_digest.h>
 #include <client.h>
 
+#include <stddef.h> /* size_t, ssize_t */
 #include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close, lseek64, SEEK_END */
 #include <errno.h> /* errno */
 #include <fcntl.h> /* open64 */

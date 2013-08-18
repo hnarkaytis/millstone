@@ -4,7 +4,8 @@
 #include <calc_digest.h>
 
 #include <sys/mman.h> /* mmap64, unmap */
-#include <errno.h> /* errno, strerror */
+#include <string.h> /* strerror */
+#include <errno.h> /* errno */
 
 #include <openssl/sha.h> /* SHA1 */
 

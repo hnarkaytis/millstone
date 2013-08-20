@@ -631,7 +631,10 @@ put_data_block (server_t * server, unsigned char * buf, int size)
 {
   status_t status = ST_SUCCESS;
   block_id_t * block_id = (block_id_t *)buf;
-  if (size < sizeof (*block_id))
+  typeof (server->connection->context->config->compress_level) * compress_level = (void*)&buf[sizeof (*block_id)];
+  unsigned char * src = &buf[sizeof (*block_id) + sizeof (server->connection->context->config->compress_level)];
+    
+  if (size < sizeof (*block_id) + sizeof (server->connection->context->config->compress_level))
     {
       ERROR_MSG ("Recieved block is too small.");
       return (ST_FAILURE);
@@ -641,9 +644,9 @@ put_data_block (server_t * server, unsigned char * buf, int size)
   /* unregister block in registry */
   sync_storage_del (&server->data_blocks, offset_key (block_id->offset));
 
-  unsigned char * data = mmap64 (NULL, block_id->size, PROT_WRITE, MAP_SHARED,
+  unsigned char * dst = mmap64 (NULL, block_id->size, PROT_WRITE, MAP_SHARED,
 				 server->connection->context->file_fd, block_id->offset);
-  if (-1 == (long)data)
+  if (-1 == (long)dst)
     {
       FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
       return (ST_FAILURE);
@@ -651,15 +654,26 @@ put_data_block (server_t * server, unsigned char * buf, int size)
   else
     {
 #ifdef HAVE_ZLIB
-      uLong length = block_id->size;
-      int z_status = uncompress (data, &length, &buf[sizeof (*block_id)], size - sizeof (*block_id));
-
-      if (Z_OK != z_status)
-	status = ST_FAILURE;
+      if (*compress_level > 0)
+	{
+	  uLong length = block_id->size;
+	  int z_status = uncompress (dst, &length, src,
+				     size - sizeof (*block_id) - sizeof (server->connection->context->config->compress_level));
+	  if (Z_OK != z_status)
+	    status = ST_FAILURE;
+	}
+      else
+	memcpy (dst, src, block_id->size);
 #else /* HAVE_ZLIB */
-      memcpy (data, &buf[sizeof (*block_id)], block_id->size);
+      if (*compress_level > 0)
+	{
+	  FATAL_MSG ("Got compressed data, but zlib is not available.");
+	  return (ST_FAILURE);
+	}
+      memcpy (src, dst, block_id->size);
 #endif /* HAVE_ZLIB */
-      if (0 != munmap (data, block_id->size))
+      
+      if (0 != munmap (dst, block_id->size))
 	{
 	  ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
 	  status = ST_FAILURE;

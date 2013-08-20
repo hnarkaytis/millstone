@@ -31,6 +31,7 @@ TYPEDEF_STRUCT (config_t,
 		int dst_port,
 		int listen_port,
 		int mem_threshold,
+		int32_t compress_level,
 		)
 
 TYPEDEF_STRUCT (context_t,

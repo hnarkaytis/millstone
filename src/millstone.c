@@ -1,3 +1,6 @@
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif /* HAVE_CONFIG_H */
 #include <millstone.h>
 #include <logging.h>
 #include <client.h>
@@ -8,6 +11,13 @@
 #include <string.h> /* memset, strchr */
 #include <getopt.h> /* getopt_long */
 
+#ifdef HAVE_ZLIB
+#include <zlib.h>
+#define DEFAULT_COMPRESS_LEVEL (Z_NO_COMPRESSION)
+#else /* HAVE_ZLIB */
+#define DEFAULT_COMPRESS_LEVEL (0)
+#endif /* HAVE_ZLIB */
+
 #define DEFAULT_MEM_THRESHOLD (5)
 
 static status_t
@@ -17,7 +27,7 @@ parse_args (int argc, char * argv[], config_t * config)
   static struct option long_options[] =
     {
       /* These options set a flag. */
-      {"compress", no_argument, NULL, 'c'},
+      {"compress", required_argument, NULL, 'c'},
       {"log-level", required_argument, NULL, 'l'},
       {0, 0, 0, 0}
     };
@@ -28,8 +38,9 @@ parse_args (int argc, char * argv[], config_t * config)
   config->listen_port = DEFAULT_LISTEN_PORT;
   config->dst_port = DEFAULT_LISTEN_PORT;
   config->mem_threshold = DEFAULT_MEM_THRESHOLD;
+  config->compress_level = DEFAULT_COMPRESS_LEVEL;
   
-  while ((c = getopt_long (argc, argv, "cl:", long_options, &option_index)) != -1)
+  while ((c = getopt_long (argc, argv, "c:l:", long_options, &option_index)) != -1)
     switch (c)
       {
       case 0:
@@ -43,6 +54,8 @@ parse_args (int argc, char * argv[], config_t * config)
 	break;
 
       case 'c':
+	if (optarg)
+	  config->compress_level = atoi (optarg);
 	break;
       case 'l':
 	{
@@ -52,6 +65,10 @@ parse_args (int argc, char * argv[], config_t * config)
 	}
 	break;
       }
+  
+#ifndef HAVE_ZLIB
+  config->compress_level = 0;
+#endif /* HAVE_ZLIB */
   
   if (argc - optind == 0)
     config->run_mode = RM_SERVER;

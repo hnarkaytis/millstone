@@ -69,23 +69,31 @@ send_block (client_t * client, block_id_t * block_id)
 #ifdef HAVE_ZLIB
   Byte buffer[block_id->size << 1];
   uLongf length = sizeof (buffer);
-  int z_status = compress2 (buffer, &length, data, block_id->size, Z_BEST_COMPRESSION);
-
-  if (Z_OK != z_status)
-    status = ST_FAILURE;
+  if (client->connection->context->config->compress_level > 0)
+    {
+      int z_status = compress2 (buffer, &length, data, block_id->size, client->connection->context->config->compress_level);
+      if (Z_OK != z_status)
+	status = ST_FAILURE;
+    }
 #endif /* HAVE_ZLIB */
 
   if (ST_SUCCESS == status)
     {
-      const struct iovec iov[] = {
-	{ .iov_len = sizeof (*block_id), .iov_base = block_id },
-#ifdef HAVE_ZLIB
-	{ .iov_len = length, .iov_base = buffer },
-#else /* HAVE_ZLIB */
+      struct iovec iov[] = {
+	{ .iov_len = sizeof (*block_id), .iov_base = block_id, },
+	{ .iov_len = sizeof (client->connection->context->config->compress_level),
+	  .iov_base = &client->connection->context->config->compress_level, },
 	{ .iov_len = block_id->size, .iov_base = data },
-#endif /* HAVE_ZLIB */
       };
 
+#ifdef HAVE_ZLIB
+      if (client->connection->context->config->compress_level > 0)
+	{
+	  iov[2].iov_len = length;
+	  iov[2].iov_base = buffer;
+	}
+#endif /* HAVE_ZLIB */
+	  
       ssize_t rv = TEMP_FAILURE_RETRY (writev (client->connection->data_fd, iov, sizeof (iov) / sizeof (iov[0])));
       ssize_t i, len = 0;
       for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)

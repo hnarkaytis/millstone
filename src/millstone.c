@@ -57,6 +57,7 @@ parse_args (int argc, char * argv[], config_t * config)
 	if (optarg)
 	  config->compress_level = atoi (optarg);
 	break;
+	
       case 'l':
 	{
 	  log_level_t log_level = get_log_level (optarg);
@@ -65,7 +66,7 @@ parse_args (int argc, char * argv[], config_t * config)
 	}
 	break;
       }
-  
+
 #ifndef HAVE_ZLIB
   config->compress_level = 0;
 #endif /* HAVE_ZLIB */

@@ -20,6 +20,7 @@
 #include <sys/mman.h> /* mmap64, unmap */
 #include <sys/uio.h> /* writev, struct iovec */
 #include <sys/socket.h> /* socket, shutdown, connect */
+#include <sys/user.h> /* PAGE_SIZE */
 
 #include <pthread.h>
 #ifdef HAVE_ZLIB
@@ -58,8 +59,10 @@ send_block (client_t * client, block_id_t * block_id)
 {
   status_t status = ST_SUCCESS;
   DUMP_VAR (block_id_t, block_id);
-  unsigned char * data = mmap64 (NULL, block_id->size, PROT_READ, MAP_PRIVATE,
-				 client->connection->context->file_fd, block_id->offset);
+  off64_t offset = block_id->offset & ~(PAGE_SIZE - 1);
+  size_t shift = block_id->offset & (PAGE_SIZE - 1);
+  unsigned char * data = mmap64 (NULL, block_id->size + shift, PROT_READ, MAP_PRIVATE,
+				 client->connection->context->file_fd, offset);
   if (-1 == (long)data)
     {
       FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
@@ -71,7 +74,7 @@ send_block (client_t * client, block_id_t * block_id)
   uLongf length = sizeof (buffer);
   if (client->connection->context->config->compress_level > 0)
     {
-      int z_status = compress2 (buffer, &length, data, block_id->size, client->connection->context->config->compress_level);
+      int z_status = compress2 (buffer, &length, &data[shift], block_id->size, client->connection->context->config->compress_level);
       if (Z_OK != z_status)
 	status = ST_FAILURE;
     }
@@ -83,7 +86,7 @@ send_block (client_t * client, block_id_t * block_id)
 	{ .iov_len = sizeof (*block_id), .iov_base = block_id, },
 	{ .iov_len = sizeof (client->connection->context->config->compress_level),
 	  .iov_base = &client->connection->context->config->compress_level, },
-	{ .iov_len = block_id->size, .iov_base = data },
+	{ .iov_len = block_id->size, .iov_base = &data[shift], },
       };
 
 #ifdef HAVE_ZLIB
@@ -205,7 +208,10 @@ digest_calculator (void * arg)
 	  msg.msg_data.block_matched.matched = !memcmp (block_digest.digest, msg.msg_data.block_digest.digest, sizeof (block_digest.digest));
 	  msg.msg_data.block_matched.duplicate = FALSE;
 
-	  if (avphys_pages > phys_pages * client->connection->context->config->mem_threshold / 100)
+	  DEBUG_MSG ("Block on offset %zd matched status %d.",
+		     msg.msg_data.block_digest.block_id.offset, msg.msg_data.block_matched.matched);
+	  
+	  if (100 * avphys_pages > phys_pages * client->connection->context->config->mem_threshold)
 	    {
 	      if (allocated_block_digest == NULL)
 		allocated_block_digest = MR_MALLOC (sizeof (*allocated_block_digest));
@@ -219,7 +225,7 @@ digest_calculator (void * arg)
 		    {
 		      block_digest_t * matched_block_digest = find->ptr;
 		      bool duplicate = (matched_block_digest != allocated_block_digest);
-		  
+
 		      if (!duplicate)
 			allocated_block_digest = NULL;
 		  

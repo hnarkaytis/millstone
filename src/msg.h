@@ -13,6 +13,7 @@
 #define MSG_QUEUE_INIT(MSG_QUEUE, ARRAY) msg_queue_init (MSG_QUEUE, ARRAY, sizeof (ARRAY))
 
 TYPEDEF_UNION (msg_data_t,
+	       NONE (char, empty),
 	       (block_id_t, block_id),
 	       (block_matched_t, block_matched),
 	       (block_digest_t, block_digest),

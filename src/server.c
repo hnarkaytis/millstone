@@ -26,8 +26,8 @@
 
 #define DATA_READERS (4)
 
-#define SPLIT_RATIO (128)
-#define MIN_BLOCK_SIZE (PAGE_SIZE)
+#define SPLIT_RATIO (1 << 7)
+#define MIN_BLOCK_SIZE (1 << 12)
 #define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO * SPLIT_RATIO)
 
 TYPEDEF_STRUCT (server_ctx_t,
@@ -99,7 +99,7 @@ addr_hash (const mr_ptr_t key, const void * context)
 }
 
 static status_t
-push_task (server_t * server, task_t * task)
+task_push (server_t * server, task_t * task)
 {
   pthread_mutex_lock (&server->tip_mutex);
   ++server->tip;
@@ -169,28 +169,37 @@ static status_t
 copy_duplicate (server_t * server, block_matched_t * block_matched)
 {
   status_t status;
-  
+  DEBUG_MSG ("Got message that block %zd is duplicated.", block_matched->block_id.offset);
   if ((block_matched->block_id.size != block_matched->duplicate_block_id.size) ||
       (NULL != sync_storage_find (&server->data_blocks,
 				  offset_key (block_matched->duplicate_block_id.offset))))
-    status = send_block_request (server, &block_matched->block_id);
+    {
+      DEBUG_MSG ("First duplicated block is not recieved yet.");
+      status = send_block_request (server, &block_matched->block_id);
+    }
   else
     {
-      unsigned char * src = mmap64 (NULL, block_matched->duplicate_block_id.size, PROT_WRITE, MAP_SHARED,
-				     server->connection->context->file_fd, block_matched->duplicate_block_id.offset);
+      off64_t src_offset = block_matched->duplicate_block_id.offset & ~(PAGE_SIZE - 1);
+      size_t src_shift = block_matched->duplicate_block_id.offset & (PAGE_SIZE - 1);
+      unsigned char * src = mmap64 (NULL, block_matched->duplicate_block_id.size + src_shift,
+				    PROT_WRITE, MAP_SHARED, server->connection->context->file_fd, src_offset);
       status = ST_FAILURE;
       
       if (-1 == (long)src)
 	FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
       else
 	{      
-	  unsigned char * dst = mmap64 (NULL, block_matched->block_id.size, PROT_WRITE, MAP_SHARED,
-					server->connection->context->file_fd, block_matched->block_id.offset);
+	  off64_t dst_offset = block_matched->block_id.offset & ~(PAGE_SIZE - 1);
+	  size_t dst_shift = block_matched->block_id.offset & (PAGE_SIZE - 1);
+	  unsigned char * dst = mmap64 (NULL, block_matched->block_id.size + dst_shift, PROT_WRITE, MAP_SHARED,
+					server->connection->context->file_fd, dst_offset);
 	  if (-1 == (long)dst)
 	    FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
 	  else
 	    {
-	      memcpy (dst, src, block_matched->block_id.size);
+	      DEBUG_MSG ("Copy block from offset %zd to offset %zd.",
+			 block_matched->duplicate_block_id.offset, block_matched->block_id.offset);
+	      memcpy (&dst[dst_shift], &src[src_shift], block_matched->block_id.size);
 	      if (0 != munmap (dst, block_matched->block_id.size))
 		FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
 	      else
@@ -229,7 +238,7 @@ block_matched (server_t * server, block_matched_t * block_matched)
 	   task.size * SPLIT_RATIO < block_matched->block_id.size;
 	   task.size *= SPLIT_RATIO);
       DUMP_VAR (task_t, &task);
-      status = push_task (server, &task);
+      status = task_push (server, &task);
       DEBUG_MSG ("Task pushed to queue.");
     }
   return (status);
@@ -314,7 +323,7 @@ server_worker (void * arg)
 	  msg.msg_data.block_id.offset = task.block_id.offset + offset;
 	  if (msg.msg_data.block_id.size > task.block_id.size - offset)
 	    msg.msg_data.block_id.size = task.block_id.size - offset;
-	  
+
 	  DEBUG_MSG ("Calc digest for offset %zd status %d.", msg.msg_data.block_id.offset, status);
 	  status = calc_digest (&msg.msg_data.block_digest, server->connection->context->file_fd);
 	  if (ST_SUCCESS != status)
@@ -353,7 +362,7 @@ server_cmd_writer (server_t * server)
       DEBUG_MSG ("Write message type %d to client %08x:%04x.", msg.msg_type,
 		 server->connection->remote.sin_addr.s_addr, server->connection->remote.sin_port);
       DUMP_VAR (msg_t, &msg);
-      
+
       status = msg_send (server->connection->cmd_fd, &msg);
       if (status != ST_SUCCESS)
 	break;
@@ -473,7 +482,7 @@ start_cmd_reader (server_t * server)
       task.block_id.size = server->connection->context->size;
       task.size = MAX_BLOCK_SIZE;
       DEBUG_MSG ("File on server exists. Push initial task.");
-      status = push_task (server, &task);
+      status = task_push (server, &task);
       DEBUG_MSG ("Start workers with status %d.", status);
       if (ST_SUCCESS == status)
 	status = start_workers (server);
@@ -644,8 +653,10 @@ put_data_block (server_t * server, unsigned char * buf, int size)
   /* unregister block in registry */
   sync_storage_del (&server->data_blocks, offset_key (block_id->offset));
 
-  unsigned char * dst = mmap64 (NULL, block_id->size, PROT_WRITE, MAP_SHARED,
-				 server->connection->context->file_fd, block_id->offset);
+  off64_t offset = block_id->offset & ~(PAGE_SIZE - 1);
+  size_t shift = block_id->offset & (PAGE_SIZE - 1);
+  unsigned char * dst = mmap64 (NULL, block_id->size + shift, PROT_WRITE, MAP_SHARED,
+				 server->connection->context->file_fd, offset);
   if (-1 == (long)dst)
     {
       FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
@@ -657,7 +668,7 @@ put_data_block (server_t * server, unsigned char * buf, int size)
       if (*compress_level > 0)
 	{
 	  uLong length = block_id->size;
-	  int z_status = uncompress (dst, &length, src,
+	  int z_status = uncompress (&dst[shift], &length, src,
 				     size - sizeof (*block_id) - sizeof (server->connection->context->config->compress_level));
 	  if (Z_OK != z_status)
 	    status = ST_FAILURE;
@@ -670,7 +681,7 @@ put_data_block (server_t * server, unsigned char * buf, int size)
 	  FATAL_MSG ("Got compressed data, but zlib is not available.");
 	  return (ST_FAILURE);
 	}
-      memcpy (src, dst, block_id->size);
+      memcpy (src, &dst[shift], block_id->size);
 #endif /* HAVE_ZLIB */
       
       if (0 != munmap (dst, block_id->size))

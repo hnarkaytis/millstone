@@ -39,6 +39,7 @@ TYPEDEF_STRUCT (context_t,
 		(bool, file_exists),
 		int file_fd,
 		(size_t, size),
+		(uint8_t *, data),
 		)
 
 TYPEDEF_STRUCT (connection_t,

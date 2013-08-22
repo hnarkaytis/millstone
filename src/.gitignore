@@ -16,3 +16,4 @@
 /server.o
 /stamp-h1
 /sync_storage.o
+/task_queue.o

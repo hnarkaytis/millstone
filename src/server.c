@@ -674,7 +674,7 @@ put_data_block (server_t * server, unsigned char * buf, int size)
 	    status = ST_FAILURE;
 	}
       else
-	memcpy (dst, src, block_id->size);
+	memcpy (&dst[shift], src, block_id->size);
 #else /* HAVE_ZLIB */
       if (*compress_level > 0)
 	{

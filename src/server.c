@@ -26,10 +26,6 @@
 
 #define DATA_READERS (4)
 
-#define SPLIT_RATIO (1 << 7)
-#define MIN_BLOCK_SIZE (1 << 12)
-#define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO * SPLIT_RATIO)
-
 TYPEDEF_STRUCT (server_ctx_t,
 		(config_t *, config),
 		int server_sock,
@@ -99,59 +95,50 @@ addr_hash (const mr_ptr_t key, const void * context)
   return (addr->sin_addr.s_addr + 0xDeadBeef * addr->sin_port);
 }
 
-static status_t
-task_push (server_t * server, task_t * task)
+static void
+tip_inc (server_t * server)
 {
   pthread_mutex_lock (&server->tip_mutex);
   ++server->tip;
   pthread_mutex_unlock (&server->tip_mutex);
+}
+
+static void
+tip_dec (server_t * server)
+{
+  pthread_mutex_lock (&server->tip_mutex);
+  if (--server->tip == 0)
+    pthread_cond_broadcast (&server->tip_cond);
+  pthread_mutex_unlock (&server->tip_mutex);
+}
+
+static status_t
+task_push (server_t * server, task_t * task)
+{
+  tip_inc (server);
   status_t status = task_queue_push (&server->task_queue, task);
   if (ST_SUCCESS != status)
-    {
-      pthread_mutex_lock (&server->tip_mutex);
-      --server->tip;
-      pthread_mutex_unlock (&server->tip_mutex);
-      pthread_cond_broadcast (&server->tip_cond);
-    }
+    tip_dec (server);
   return (status);
 }
 
 static status_t
 msg_push (server_t * server, msg_t * msg)
 {
-  pthread_mutex_lock (&server->tip_mutex);
-  ++server->tip;
-  pthread_mutex_unlock (&server->tip_mutex);
+  tip_inc (server);
   status_t status = queue_push (&server->cmd_out.queue, msg);
   if (ST_SUCCESS != status)
-    {
-      pthread_mutex_lock (&server->tip_mutex);
-      --server->tip;
-      pthread_mutex_unlock (&server->tip_mutex);
-      pthread_cond_broadcast (&server->tip_cond);
-    }
+    tip_dec (server);
   return (status);
 }
 
-static status_t
-finish_tip (server_t * server)
+static void
+send_terminate (server_t * server)
 {
-  status_t status = ST_SUCCESS;
-
-  pthread_mutex_lock (&server->tip_mutex);
-  --server->tip;
-  pthread_mutex_unlock (&server->tip_mutex);
-  pthread_cond_broadcast (&server->tip_cond);
-  
-  if (0 == server->tip)
-    {
-      msg_t msg;
-      memset (&msg, 0, sizeof (msg));
-      msg.msg_type = MT_TERMINATE;
-      status = msg_push (server, &msg);
-    }
-  
-  return (status);
+  msg_t msg;
+  memset (&msg, 0, sizeof (msg));
+  msg.msg_type = MT_TERMINATE;
+  msg_push (server, &msg);
 }
 
 static status_t
@@ -267,8 +254,8 @@ server_cmd_reader (void * arg)
 	  status = ST_FAILURE;
 	  break;
 	}
-      if (ST_SUCCESS != finish_tip (server))
-	break;
+      tip_dec (server);
+      
       if (ST_SUCCESS != status)
 	break;
     }
@@ -315,9 +302,7 @@ server_worker (void * arg)
 	  DEBUG_MSG ("Pushed digest for offset %zd.", msg.msg_data.block_id.offset);
 	}
       
-      status = finish_tip (server);
-      if (ST_SUCCESS != status)
-	break;
+      tip_dec (server);
     }
   DEBUG_MSG ("Exiting server worker.");
   return (NULL);
@@ -386,30 +371,31 @@ static void *
 data_retrieval (void * arg)
 {
   server_t * server = arg;
+  status_t status = ST_SUCCESS;
   block_id_t block_id;
   
   DEBUG_MSG ("Data retrieval thread has started.");
   memset (&block_id, 0, sizeof (block_id));
   block_id.size = MIN_BLOCK_SIZE;
 
-  /* make a fake task-in-progress just to make sure that command reciever will not send MT_TERMINATE */
-  pthread_mutex_lock (&server->tip_mutex);
-  ++server->tip;
-  pthread_mutex_unlock (&server->tip_mutex);
-  
   for (block_id.offset = 0;
        block_id.offset < server->connection->context->size;
        block_id.offset += block_id.size)
     {
       if (block_id.size > server->connection->context->size - block_id.offset)
 	block_id.size = server->connection->context->size - block_id.offset;
-      status_t status = send_block_request (server, &block_id);
+      status = send_block_request (server, &block_id);
       if (ST_SUCCESS != status)
 	break;
     }
 
-  /* finish fake task-in-progress */
-  finish_tip (server);
+  pthread_mutex_lock (&server->tip_mutex);
+  while (server->tip != 0)
+    pthread_cond_wait (&server->tip_cond, &server->tip_mutex);
+  pthread_mutex_unlock (&server->tip_mutex);
+
+  if (ST_SUCCESS == status)
+    send_terminate (server);
   
   DEBUG_MSG ("Exiting data retrieval thread.");
   return (NULL);
@@ -437,11 +423,69 @@ start_data_retrieval (server_t * server)
   return (status);
 }
 
+static void *
+task_producer (void * arg)
+{
+  server_t * server = arg;
+  status_t status = ST_SUCCESS;
+  task_t task;
+  
+  DEBUG_MSG ("Tasks producer thread has started.");
+
+  memset (&task, 0, sizeof (task));
+  task.block_id.size = MAX_BLOCK_SIZE;
+  task.size = MAX_BLOCK_SIZE;
+  
+  for (task.block_id.offset = 0;
+       task.block_id.offset < server->connection->context->size;
+       task.block_id.offset += task.block_id.size)
+    {
+      if (task.block_id.size > server->connection->context->size - task.block_id.offset)
+	task.block_id.size = server->connection->context->size - task.block_id.offset;
+      status = task_push (server, &task);
+      if (ST_SUCCESS != status)
+	break;
+      pthread_mutex_lock (&server->tip_mutex);
+      while (server->tip != 0)
+	pthread_cond_wait (&server->tip_cond, &server->tip_mutex);
+      pthread_mutex_unlock (&server->tip_mutex);
+    }
+
+  if (ST_SUCCESS == status)
+    send_terminate (server);
+  
+  DEBUG_MSG ("Exiting data retrieval thread.");
+  return (NULL);
+}
+
+static status_t
+start_task_producer (server_t * server)
+{
+  pthread_t id;
+  int rv = pthread_create (&id, NULL, task_producer, server);
+  if (rv != 0)
+    {
+      ERROR_MSG ("Failed to start tasks producer thread.");
+      return (ST_FAILURE);
+    }
+
+  status_t status = start_workers (server);
+
+  DEBUG_MSG ("Canceling tasks producer thread.");
+  task_queue_cancel (&server->task_queue);
+  pthread_join (id, NULL);
+  DEBUG_MSG ("Tasks producer thread canceled.");
+  
+  return (status);
+}
+
 static status_t
 start_cmd_reader (server_t * server)
 {
   pthread_t id;
+  status_t status;
   int rv = pthread_create (&id, NULL, server_cmd_reader, server);
+  
   if (rv != 0)
     {
       ERROR_MSG ("Failed to start command reader thread.");
@@ -450,22 +494,10 @@ start_cmd_reader (server_t * server)
   DEBUG_MSG ("Satart command reader. Thread create returned %d.", rv);
 
   DEBUG_MSG ("File on server status %d.", server->connection->context->file_exists);
-  status_t status;
   if (!server->connection->context->file_exists)
     status = start_data_retrieval (server);
   else
-    {
-      task_t task;
-      memset (&task, 0, sizeof (task));
-      task.block_id.offset = 0;
-      task.block_id.size = server->connection->context->size;
-      task.size = MAX_BLOCK_SIZE;
-      DEBUG_MSG ("File on server exists. Push initial task.");
-      status = task_push (server, &task);
-      DEBUG_MSG ("Start workers with status %d.", status);
-      if (ST_SUCCESS == status)
-	status = start_workers (server);
-    }
+    status = start_task_producer (server);
 
   DEBUG_MSG ("Canceling command reader thread.");
   queue_cancel (&server->cmd_out.queue);

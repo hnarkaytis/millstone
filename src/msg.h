@@ -7,8 +7,12 @@
 #include <block.h> /* block_*_t */
 #include <queue.h> /* queue_t */
 
-#define MSG_OUT_QUEUE_SIZE (1 << 2)
-#define MSG_IN_QUEUE_SIZE (1 << 16)
+#define SPLIT_RATIO (1 << 8)
+#define MIN_BLOCK_SIZE (1 << 10)
+#define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO * SPLIT_RATIO)
+
+#define MSG_OUT_QUEUE_SIZE (1 << 1)
+#define MSG_IN_QUEUE_SIZE (MAX_BLOCK_SIZE / MIN_BLOCK_SIZE)
 
 #define MSG_QUEUE_INIT(MSG_QUEUE, ARRAY) msg_queue_init (MSG_QUEUE, ARRAY, sizeof (ARRAY))
 

@@ -60,16 +60,19 @@ task_queue_pop (task_queue_t * task_queue, task_t * task)
 void
 task_queue_cancel (task_queue_t * task_queue)
 {
-  task_queue->cancel = TRUE;
-  pthread_cond_broadcast (&task_queue->empty);
-  pthread_mutex_lock (&task_queue->mutex);
-  while (task_queue->queue.prev != &task_queue->queue)
+  if (!task_queue->cancel)
     {
-      task_t * slot = task_queue->queue.prev;
-      slot->prev->next = &task_queue->queue;
-      task_queue->queue.prev = slot->prev;
-      MR_FREE (slot);
-      --task_queue->count;
+      task_queue->cancel = TRUE;
+      pthread_cond_broadcast (&task_queue->empty);
+      pthread_mutex_lock (&task_queue->mutex);
+      while (task_queue->queue.prev != &task_queue->queue)
+	{
+	  task_t * slot = task_queue->queue.prev;
+	  slot->prev->next = &task_queue->queue;
+	  task_queue->queue.prev = slot->prev;
+	  MR_FREE (slot);
+	  --task_queue->count;
+	}
+      pthread_mutex_unlock (&task_queue->mutex);
     }
-  pthread_mutex_unlock (&task_queue->mutex);
 }

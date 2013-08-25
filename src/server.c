@@ -7,18 +7,18 @@
 #include <file_meta.h>
 #include <queue.h>
 #include <msg.h>
-#include <calc_digest.h>
 #include <sync_storage.h>
 #include <task_queue.h>
 #include <server.h>
 
 #include <stddef.h> /* size_t, ssize_t */
+#include <signal.h> /* signal, SIG_IGN, SIGPIPE */
 #include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close, ftruncate64 */
 #include <string.h> /* memcpy, strerror */
 #include <errno.h> /* errno */
-#include <sys/user.h> /* PAGE_SIZE */
 #include <sys/mman.h> /* mmap64, unmap */
 
+#include <openssl/sha.h> /* SHA1 */
 #include <pthread.h>
 #ifdef HAVE_ZLIB
 #include <zlib.h>
@@ -45,6 +45,7 @@ TYPEDEF_STRUCT (server_t,
 		(sync_storage_t, data_blocks),
 		(server_ctx_t *, server_ctx),
 		int tip,
+		(pthread_cond_t, tip_cond),
 		(pthread_mutex_t, tip_mutex),
 		)
 
@@ -110,6 +111,7 @@ task_push (server_t * server, task_t * task)
       pthread_mutex_lock (&server->tip_mutex);
       --server->tip;
       pthread_mutex_unlock (&server->tip_mutex);
+      pthread_cond_broadcast (&server->tip_cond);
     }
   return (status);
 }
@@ -126,6 +128,7 @@ msg_push (server_t * server, msg_t * msg)
       pthread_mutex_lock (&server->tip_mutex);
       --server->tip;
       pthread_mutex_unlock (&server->tip_mutex);
+      pthread_cond_broadcast (&server->tip_cond);
     }
   return (status);
 }
@@ -134,10 +137,11 @@ static status_t
 finish_tip (server_t * server)
 {
   status_t status = ST_SUCCESS;
-  
+
   pthread_mutex_lock (&server->tip_mutex);
   --server->tip;
   pthread_mutex_unlock (&server->tip_mutex);
+  pthread_cond_broadcast (&server->tip_cond);
   
   if (0 == server->tip)
     {
@@ -168,7 +172,7 @@ send_block_request (server_t * server, block_id_t * block_id)
 static status_t
 copy_duplicate (server_t * server, block_matched_t * block_matched)
 {
-  status_t status;
+  status_t status = ST_SUCCESS;
   DEBUG_MSG ("Got message that block %zd is duplicated.", block_matched->block_id.offset);
   if ((block_matched->block_id.size != block_matched->duplicate_block_id.size) ||
       (NULL != sync_storage_find (&server->data_blocks,
@@ -179,36 +183,9 @@ copy_duplicate (server_t * server, block_matched_t * block_matched)
     }
   else
     {
-      off64_t src_offset = block_matched->duplicate_block_id.offset & ~(PAGE_SIZE - 1);
-      size_t src_shift = block_matched->duplicate_block_id.offset & (PAGE_SIZE - 1);
-      unsigned char * src = mmap64 (NULL, block_matched->duplicate_block_id.size + src_shift,
-				    PROT_WRITE, MAP_SHARED, server->connection->context->file_fd, src_offset);
-      status = ST_FAILURE;
-      
-      if (-1 == (long)src)
-	FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
-      else
-	{      
-	  off64_t dst_offset = block_matched->block_id.offset & ~(PAGE_SIZE - 1);
-	  size_t dst_shift = block_matched->block_id.offset & (PAGE_SIZE - 1);
-	  unsigned char * dst = mmap64 (NULL, block_matched->block_id.size + dst_shift, PROT_WRITE, MAP_SHARED,
-					server->connection->context->file_fd, dst_offset);
-	  if (-1 == (long)dst)
-	    FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
-	  else
-	    {
-	      DEBUG_MSG ("Copy block from offset %zd to offset %zd.",
-			 block_matched->duplicate_block_id.offset, block_matched->block_id.offset);
-	      memcpy (&dst[dst_shift], &src[src_shift], block_matched->block_id.size);
-	      if (0 != munmap (dst, block_matched->block_id.size))
-		FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
-	      else
-		status = ST_SUCCESS;
-	    }
-	  
-	  if (0 != munmap (src, block_matched->duplicate_block_id.size))
-	    FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
-	}
+      memcpy (&server->connection->context->data[block_matched->block_id.offset],
+	      &server->connection->context->data[block_matched->duplicate_block_id.offset],
+	      block_matched->block_id.size);
     }
   
   return (status);
@@ -250,7 +227,10 @@ block_sent (server_t * server, block_id_t * block_id)
   status_t status = ST_SUCCESS;
   DEBUG_MSG ("Got confirmation for block %zd:%zd.", block_id->offset, block_id->size);
   if (NULL != sync_storage_find (&server->data_blocks, offset_key (block_id->offset)))
-    status = send_block_request (server, block_id);
+    {
+      DEBUG_MSG ("Packet lost for offset 0x%zx.", block_id->offset);
+      status = send_block_request (server, block_id);
+    }
   return (status);
 }
 
@@ -292,7 +272,7 @@ server_cmd_reader (void * arg)
       if (ST_SUCCESS != status)
 	break;
     }
-  shutdown (server->connection->cmd_fd, SD_BOTH);
+
   DEBUG_MSG ("Exiting server command reader thread.");
   return (NULL);
 }
@@ -325,10 +305,9 @@ server_worker (void * arg)
 	    msg.msg_data.block_id.size = task.block_id.size - offset;
 
 	  DEBUG_MSG ("Calc digest for offset %zd status %d.", msg.msg_data.block_id.offset, status);
-	  status = calc_digest (&msg.msg_data.block_digest, server->connection->context->file_fd);
-	  if (ST_SUCCESS != status)
-	    break;
-	  
+	  SHA1 (&server->connection->context->data[msg.msg_data.block_digest.block_id.offset],
+		msg.msg_data.block_digest.block_id.size, (unsigned char*)&msg.msg_data.block_digest.digest);
+
 	  DEBUG_MSG ("Pushing to outgoing queue digest for offset %zd.", msg.msg_data.block_id.offset);
 	  status = msg_push (server, &msg);
 	  if (ST_SUCCESS != status)
@@ -518,6 +497,9 @@ handle_client (void * arg)
   memset (&server, 0, sizeof (server));
   server.connection = &connection;
   server.tip = 0;
+  pthread_mutex_init (&server.tip_mutex, NULL);
+  pthread_cond_init (&server.tip_cond, NULL);
+  
   server.server_ctx = accepter_ctx.server_ctx;
   
   sync_storage_init (&server.data_blocks, offset_key_compar, offset_key_hash, "long_int_t", NULL);
@@ -533,9 +515,15 @@ handle_client (void * arg)
   if (ST_SUCCESS == status)
     {
       status = sync_storage_add (&server.server_ctx->clients, &server);
-      DEBUG_MSG ("Adder client context to registry. Return value %d.", status);
+      DEBUG_MSG ("Added client context to registry. Return value %d.", status);
       if (ST_SUCCESS == status)
 	status = start_cmd_reader (&server);
+
+      if (0 != msync (context.data, context.size, MS_SYNC))
+	ERROR_MSG ("Failed to sync memory. Error (%d) %s.\n", errno, strerror (errno));
+      if (0 != munmap (context.data, context.size))
+	ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
+
       close (context.file_fd);
     }
   
@@ -636,60 +624,59 @@ create_server_socket (server_ctx_t * server_ctx)
 }
 
 static status_t
-put_data_block (server_t * server, unsigned char * buf, int size)
+put_data_block (server_t * server, unsigned char * buf, int buf_size)
 {
   status_t status = ST_SUCCESS;
   block_id_t * block_id = (block_id_t *)buf;
   typeof (server->connection->context->config->compress_level) * compress_level = (void*)&buf[sizeof (*block_id)];
-  unsigned char * src = &buf[sizeof (*block_id) + sizeof (server->connection->context->config->compress_level)];
+  unsigned char * src = &buf[sizeof (*block_id) + sizeof (*compress_level)];
+  unsigned char * dst = &server->connection->context->data[block_id->offset];
+  int size = buf_size - sizeof (*block_id) - sizeof (*compress_level);
     
-  if (size < sizeof (*block_id) + sizeof (server->connection->context->config->compress_level))
+  if (size < 0)
     {
       ERROR_MSG ("Recieved block is too small.");
       return (ST_FAILURE);
     }
 
-  DEBUG_MSG ("Write block at offset %zd size %zd.", block_id->offset, block_id->size);
-  /* unregister block in registry */
-  sync_storage_del (&server->data_blocks, offset_key (block_id->offset));
+  DEBUG_MSG ("Write block at offset 0x%zx size %zd.", block_id->offset, block_id->size);
 
-  off64_t offset = block_id->offset & ~(PAGE_SIZE - 1);
-  size_t shift = block_id->offset & (PAGE_SIZE - 1);
-  unsigned char * dst = mmap64 (NULL, block_id->size + shift, PROT_WRITE, MAP_SHARED,
-				 server->connection->context->file_fd, offset);
-  if (-1 == (long)dst)
-    {
-      FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
-      return (ST_FAILURE);
-    }
-  else
-    {
 #ifdef HAVE_ZLIB
-      if (*compress_level > 0)
+  if (*compress_level > 0)
+    {
+      uLong length = block_id->size;
+      int z_status = uncompress (dst, &length, src, size);
+      if (Z_OK != z_status)
 	{
-	  uLong length = block_id->size;
-	  int z_status = uncompress (&dst[shift], &length, src,
-				     size - sizeof (*block_id) - sizeof (server->connection->context->config->compress_level));
-	  if (Z_OK != z_status)
-	    status = ST_FAILURE;
+	  ERROR_MSG ("Failed to uncompressed recieved block.");
+	  status = ST_FAILURE;
 	}
-      else
-	memcpy (&dst[shift], src, block_id->size);
-#else /* HAVE_ZLIB */
-      if (*compress_level > 0)
+      if (length != block_id->size)
 	{
-	  FATAL_MSG ("Got compressed data, but zlib is not available.");
-	  return (ST_FAILURE);
-	}
-      memcpy (src, &dst[shift], block_id->size);
-#endif /* HAVE_ZLIB */
-      
-      if (0 != munmap (dst, block_id->size))
-	{
-	  ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
+	  ERROR_MSG ("Uncompressed block size mismatched target size.");
 	  status = ST_FAILURE;
 	}
     }
+  else
+#endif /* HAVE_ZLIB */
+    
+    {
+      if (*compress_level > 0)
+	{
+	  ERROR_MSG ("Got compressed data, but zlib is not available.");
+	  status = ST_FAILURE;
+	}
+      if (size != block_id->size)
+	{
+	  ERROR_MSG ("Recieved block size mismatched target size (%d != %d).", size, block_id->size);
+	  status = ST_FAILURE;
+	}
+      memcpy (dst, src, block_id->size);
+    }
+  
+  /* unregister block in registry */
+  sync_storage_del (&server->data_blocks, offset_key (block_id->offset));
+  
   DEBUG_MSG ("Write block done.");
   
   return (status);
@@ -785,6 +772,10 @@ run_server (config_t * config)
   server_ctx.server_name.sin_addr.s_addr = htonl (INADDR_ANY);
 
   sync_storage_init (&server_ctx.clients, addr_compar, addr_hash, "server_t", NULL);
+
+  /* if one of the clients unexpectedly terminates
+     server should ignore SIGPIPE */
+  signal (SIGPIPE, SIG_IGN);
 
   server_ctx.data_sock = socket (PF_INET, SOCK_DGRAM, IPPROTO_UDP);
   DEBUG_MSG ("Created data socket %d.", server_ctx.data_sock);

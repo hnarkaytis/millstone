@@ -21,7 +21,7 @@ AC_C_INLINE
 PKG_CHECK_MODULES([LIBXML2], [libxml-2.0 >= 2.0], [AC_DEFINE(HAVE_LIBXML2, [], [define if libxml2 is present])] )
 AC_CHECK_LIB([z], [compress], [AC_DEFINE(HAVE_ZLIB, [], [define if zlib is present]) LIBS+=-lz ])
 
-AC_ARG_ENABLE(compile-log-level, [  --enable-compile-log-level		set compile time log level], COMPILE_LOG_LEVEL=$enableval, COMPILE_LOG_LEVEL=OFF)
+AC_ARG_ENABLE(compile-log-level, [  --enable-compile-log-level		set compile time log level], COMPILE_LOG_LEVEL=$enableval, COMPILE_LOG_LEVEL=INFO)
 AC_MSG_CHECKING(compile time log level)
 AC_MSG_RESULT(${COMPILE_LOG_LEVEL})
 if test x${COMPILE_LOG_LEVEL} = xALL; then

@@ -6,7 +6,6 @@
 #include <block.h>
 #include <msg.h>
 #include <file_meta.h>
-#include <calc_digest.h>
 #include <client.h>
 
 #include <stddef.h> /* size_t, ssize_t */
@@ -20,8 +19,8 @@
 #include <sys/mman.h> /* mmap64, unmap */
 #include <sys/uio.h> /* writev, struct iovec */
 #include <sys/socket.h> /* socket, shutdown, connect */
-#include <sys/user.h> /* PAGE_SIZE */
 
+#include <openssl/sha.h> /* SHA1 */
 #include <pthread.h>
 #ifdef HAVE_ZLIB
 #include <zlib.h>
@@ -58,23 +57,17 @@ static status_t
 send_block (client_t * client, block_id_t * block_id)
 {
   status_t status = ST_SUCCESS;
+  unsigned char * block_data = &client->connection->context->data[block_id->offset];
+  
   DUMP_VAR (block_id_t, block_id);
-  off64_t offset = block_id->offset & ~(PAGE_SIZE - 1);
-  size_t shift = block_id->offset & (PAGE_SIZE - 1);
-  unsigned char * data = mmap64 (NULL, block_id->size + shift, PROT_READ, MAP_PRIVATE,
-				 client->connection->context->file_fd, offset);
-  if (-1 == (long)data)
-    {
-      FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
-      return (ST_FAILURE);
-    }
 
 #ifdef HAVE_ZLIB
   Byte buffer[block_id->size << 1];
   uLongf length = sizeof (buffer);
   if (client->connection->context->config->compress_level > 0)
     {
-      int z_status = compress2 (buffer, &length, &data[shift], block_id->size, client->connection->context->config->compress_level);
+      int z_status = compress2 (buffer, &length, block_data, block_id->size,
+				client->connection->context->config->compress_level);
       if (Z_OK != z_status)
 	status = ST_FAILURE;
     }
@@ -86,7 +79,7 @@ send_block (client_t * client, block_id_t * block_id)
 	{ .iov_len = sizeof (*block_id), .iov_base = block_id, },
 	{ .iov_len = sizeof (client->connection->context->config->compress_level),
 	  .iov_base = &client->connection->context->config->compress_level, },
-	{ .iov_len = block_id->size, .iov_base = &data[shift], },
+	{ .iov_len = block_id->size, .iov_base = block_data, },
       };
 
 #ifdef HAVE_ZLIB
@@ -111,12 +104,6 @@ send_block (client_t * client, block_id_t * block_id)
 	}
     }
   
-  if (0 != munmap (data, block_id->size))
-    {
-      ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
-      status = EXIT_FAILURE;
-    }
-  
   return (status);
 }
 
@@ -136,7 +123,7 @@ client_data_writer (void * arg)
       DUMP_VAR (msg_t, &msg);
       status = send_block (client, &msg.msg_data.block_id);
       DEBUG_MSG ("Data block send status %d.", status);
-      
+
       if (ST_SUCCESS != status)
 	msg.msg_type = MT_BLOCK_SEND_ERROR;
       else
@@ -197,41 +184,37 @@ digest_calculator (void * arg)
       DUMP_VAR (msg_t, &msg);
       
       block_digest.block_id = msg.msg_data.block_digest.block_id;
-      status = calc_digest (&block_digest, client->connection->context->file_fd);
+      SHA1 (&client->connection->context->data[block_digest.block_id.offset],
+	    block_digest.block_id.size, (unsigned char*)&block_digest.digest);
 
-      if (ST_SUCCESS != status)
-	msg.msg_type = MT_BLOCK_SEND_ERROR;
-      else
-	{
-	  long avphys_pages = sysconf (_SC_AVPHYS_PAGES);
-	  msg.msg_type = MT_BLOCK_MATCHED;
-	  msg.msg_data.block_matched.matched = !memcmp (block_digest.digest, msg.msg_data.block_digest.digest, sizeof (block_digest.digest));
-	  msg.msg_data.block_matched.duplicate = FALSE;
+      long avphys_pages = sysconf (_SC_AVPHYS_PAGES);
+      msg.msg_type = MT_BLOCK_MATCHED;
+      msg.msg_data.block_matched.matched = !memcmp (block_digest.digest, msg.msg_data.block_digest.digest, sizeof (block_digest.digest));
+      msg.msg_data.block_matched.duplicate = FALSE;
 
-	  DEBUG_MSG ("Block on offset %zd matched status %d.",
-		     msg.msg_data.block_digest.block_id.offset, msg.msg_data.block_matched.matched);
+      DEBUG_MSG ("Block on offset %zd matched status %d.",
+		 msg.msg_data.block_digest.block_id.offset, msg.msg_data.block_matched.matched);
 	  
-	  if (100 * avphys_pages > phys_pages * client->connection->context->config->mem_threshold)
+      if (100 * avphys_pages > phys_pages * client->connection->context->config->mem_threshold)
+	{
+	  if (allocated_block_digest == NULL)
+	    allocated_block_digest = MR_MALLOC (sizeof (*allocated_block_digest));
+	  if (allocated_block_digest != NULL)
 	    {
-	      if (allocated_block_digest == NULL)
-		allocated_block_digest = MR_MALLOC (sizeof (*allocated_block_digest));
-	      if (allocated_block_digest != NULL)
+	      *allocated_block_digest = block_digest;
+	      pthread_mutex_lock (&client->sent_blocks_lock);
+	      mr_ptr_t * find = mr_ic_add (&client->sent_blocks, allocated_block_digest, NULL);
+	      pthread_mutex_unlock (&client->sent_blocks_lock);
+	      if (find != NULL)
 		{
-		  *allocated_block_digest = block_digest;
-		  pthread_mutex_lock (&client->sent_blocks_lock);
-		  mr_ptr_t * find = mr_ic_add (&client->sent_blocks, allocated_block_digest, NULL);
-		  pthread_mutex_unlock (&client->sent_blocks_lock);
-		  if (find != NULL)
-		    {
-		      block_digest_t * matched_block_digest = find->ptr;
-		      bool duplicate = (matched_block_digest != allocated_block_digest);
+		  block_digest_t * matched_block_digest = find->ptr;
+		  bool duplicate = (matched_block_digest != allocated_block_digest);
 
-		      if (!duplicate)
-			allocated_block_digest = NULL;
+		  if (!duplicate)
+		    allocated_block_digest = NULL;
 		  
-		      msg.msg_data.block_matched.duplicate = duplicate;
-		      msg.msg_data.block_matched.duplicate_block_id = matched_block_digest->block_id;
-		    }
+		  msg.msg_data.block_matched.duplicate = duplicate;
+		  msg.msg_data.block_matched.duplicate_block_id = matched_block_digest->block_id;
 		}
 	    }
 	}
@@ -261,9 +244,12 @@ client_cmd_reader (client_t * client)
       msg_t msg;
       DEBUG_MSG ("Read from fd %d.", client->connection->cmd_fd);
       status = msg_recv (client->connection->cmd_fd, &msg);
-      DEBUG_MSG ("Got message with status %d.", status);
       if (ST_SUCCESS != status)
-	break;
+	{
+	  DEBUG_MSG ("Failed in msg_recv.");
+	  break;
+	}
+      
       DUMP_VAR (msg_t, &msg);
       if (MT_TERMINATE == msg.msg_type)
 	{
@@ -287,6 +273,7 @@ client_cmd_reader (client_t * client)
       if (ST_SUCCESS != status)
 	break;
     }
+  DEBUG_MSG ("Exiting client command reader.");
   return (status);
 }
 
@@ -479,8 +466,8 @@ connect_to_server (connection_t * connection)
   DEBUG_MSG ("Connected to server successfully.");
   
   status_t status = create_data_socket (connection);
-  if (ST_SUCCESS == status)
-    shutdown (connection->cmd_fd, SD_BOTH);
+
+  shutdown (connection->cmd_fd, SD_BOTH);
 
   DEBUG_MSG ("Shutdown command socket.");
 
@@ -528,7 +515,18 @@ run_client (config_t * config)
   DUMP_VAR (context_t, &context);
   
   context.size = lseek64 (context.file_fd, 0, SEEK_END);
-  status = create_server_socket (&context);
+  context.data = mmap64 (NULL, context.size, PROT_READ, MAP_PRIVATE, context.file_fd, 0);
+  
+  if (-1 == (long)context.data)
+    FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+  else
+    {
+      status = create_server_socket (&context);
+
+      if (0 != munmap (context.data, context.size))
+	ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
+    }
+  
   close (context.file_fd);
 
   DEBUG_MSG ("Exiting client.");

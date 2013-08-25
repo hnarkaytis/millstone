@@ -9,8 +9,10 @@
 #include <string.h> /* memset, setlen, strerror */
 #include <errno.h> /* errno */
 #include <stdbool.h> /* bool */
+#include <limits.h> /* PATH_MAX */
 #include <sys/stat.h> /* S_IRUSR, S_IWUSR */
 #include <sys/uio.h> /* writev, struct iovec */
+#include <sys/mman.h> /* mmap64, unmap */
 
 status_t
 read_file_meta (connection_t * connection)
@@ -29,11 +31,11 @@ read_file_meta (connection_t * connection)
   rv = TEMP_FAILURE_RETRY (read (connection->cmd_fd, &connection->remote.sin_port, len));
   if (rv != len)
     {
-      ERROR_MSG ("Failed to read file size from client.");
+      ERROR_MSG ("Failed to read UDP data port number from client.");
       return (ST_FAILURE);
     }
   
-  char dst_file[1 << 13];
+  char dst_file[PATH_MAX + (1 << 10)];
   int count = 0;
   do {
     if (sizeof (dst_file) == count)
@@ -76,6 +78,17 @@ read_file_meta (connection_t * connection)
   if (rv != 0)
     {
       ERROR_MSG ("Failed to set new size (%d) to the file '%s'.", connection->context->size, dst_file);
+      close (connection->context->file_fd);
+      return (ST_FAILURE);
+    }
+
+  connection->context->data = mmap64 (NULL, connection->context->size,
+				      PROT_WRITE, MAP_SHARED,
+				      connection->context->file_fd, 0);
+  
+  if (-1 == (long)connection->context->data)
+    {
+      FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
       close (connection->context->file_fd);
       return (ST_FAILURE);
     }

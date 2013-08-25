@@ -7,8 +7,8 @@
 #include <block.h> /* block_*_t */
 #include <queue.h> /* queue_t */
 
-#define MSG_OUT_QUEUE_SIZE (2)
-#define MSG_IN_QUEUE_SIZE (16)
+#define MSG_OUT_QUEUE_SIZE (1 << 2)
+#define MSG_IN_QUEUE_SIZE (1 << 16)
 
 #define MSG_QUEUE_INIT(MSG_QUEUE, ARRAY) msg_queue_init (MSG_QUEUE, ARRAY, sizeof (ARRAY))
 

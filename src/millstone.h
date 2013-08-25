@@ -39,6 +39,7 @@ TYPEDEF_STRUCT (context_t,
 		(bool, file_exists),
 		int file_fd,
 		(size_t, size),
+		(uint8_t *, data),
 		)
 
 TYPEDEF_STRUCT (connection_t,
@@ -49,15 +50,17 @@ TYPEDEF_STRUCT (connection_t,
 		int data_fd,
 		)
 
-#if defined COMPILE_LOG_LEVEL_LL_ALL || defined COMPILE_LOG_LEVEL_LL_INFO || defined COMPILE_LOG_LEVEL_LL_DEBUG
-#define DUMP_VAR(TYPE, VAR) ({					\
+#define DUMP_VAR_(OUTPUT_MSG, TYPE, VAR) ({			\
       char * dump = MR_SAVE_CINIT (TYPE, VAR);			\
       if (dump)							\
 	{							\
-	  DEBUG_MSG ("\n(" #TYPE ")*" #VAR " = %s", dump);	\
+	  OUTPUT_MSG ("\n(" #TYPE ")*" #VAR " = %s", dump);	\
 	  MR_FREE (dump);					\
 	}							\
     })
+
+#if defined COMPILE_LOG_LEVEL_LL_ALL || defined COMPILE_LOG_LEVEL_LL_TRACE || defined COMPILE_LOG_LEVEL_LL_DEBUG
+#defined DUMP_VAR(...) DUMP_VAR_ (DEBUG_MSG, __VA_ARGS__)
 #else
 #define DUMP_VAR _OFF_MSG
 #endif

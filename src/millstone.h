@@ -5,10 +5,12 @@
 #define _LARGEFILE64_SOURCE
 #endif /* _LARGEFILE64_SOURCE */
 
+#define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
 #include <fcntl.h> /* off64_t */
 #include <stddef.h> /* size_t */
 #include <stdbool.h> /* bool */
 #include <netinet/in.h> /* struct sockaddr_in */
+#include <sys/user.h> /* PAGE_SIZE */
 
 #include <metaresc.h>
 
@@ -17,7 +19,8 @@
 #define DEFAULT_LISTEN_PORT (31415)
 
 #define SPLIT_RATIO (1 << 7)
-#define MIN_BLOCK_SIZE (1 << 12)
+#define TRANSFER_BLOCK_SIZE (1 << 10)
+#define MIN_BLOCK_SIZE (PAGE_SIZE)
 #define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO * SPLIT_RATIO)
 
 #ifndef SD_BOTH

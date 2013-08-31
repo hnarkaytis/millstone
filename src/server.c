@@ -69,7 +69,7 @@ offset_key_hash (const long x, const void * null)
 static long
 offset_key (off64_t offset)
 {
-  return (offset / MIN_BLOCK_SIZE);
+  return (offset / TRANSFER_BLOCK_SIZE);
 }
 
 int
@@ -145,18 +145,29 @@ send_terminate (server_t * server)
 static status_t
 send_block_request (server_t * server, block_id_t * block_id)
 {
+  status_t status = ST_SUCCESS;
   msg_t msg;
   memset (&msg, 0, sizeof (msg));
   msg.msg_type = MT_BLOCK_REQUEST;
-  msg.msg_data.block_id = *block_id;
+  msg.msg_data.block_id.size = TRANSFER_BLOCK_SIZE;
   
   DUMP_VAR (msg_t, &msg);
+  
+  for (msg.msg_data.block_id.offset = block_id->offset;
+       msg.msg_data.block_id.offset < block_id->offset + block_id->size;
+       msg.msg_data.block_id.offset += msg.msg_data.block_id.size)
+    {
+      if (msg.msg_data.block_id.size > block_id->size + (msg.msg_data.block_id.offset - block_id->offset))
+	msg.msg_data.block_id.size = block_id->size + (msg.msg_data.block_id.offset - block_id->offset);
+      status = sync_storage_add (&server->data_blocks, offset_key (msg.msg_data.block_id.offset));
+      if (ST_SUCCESS != status)
+	break;
+      status = msg_push (server, &msg);
+      if (ST_SUCCESS != status)
+	break;
+    }
 
-  status_t status = sync_storage_add (&server->data_blocks, offset_key (msg.msg_data.block_id.offset));
-  if (ST_SUCCESS == status)
-    status = msg_push (server, &msg);
-
-  DEBUG_MSG ("Mesasge pushed to queue with status %d.", status);
+  DEBUG_MSG ("Block requested with status %d.", status);
   
   return (status);
 }
@@ -165,37 +176,27 @@ static status_t
 copy_duplicate (server_t * server, block_matched_t * block_matched)
 {
   status_t status = ST_FAILURE;
+  unsigned char * src = mmap64 (NULL, block_matched->duplicate_block_id.size,
+				PROT_READ, MAP_PRIVATE,
+				server->connection->context->file_fd,
+				block_matched->duplicate_block_id.offset);
   
-  DEBUG_MSG ("Got message that block %zd is duplicated.", block_matched->block_id.offset);
+  DEBUG_MSG ("Got message that block %zd:%zd is duplicated of block %zd:%zd.",
+	     block_matched->block_id.offset, block_matched->block_id.size,
+	     block_matched->duplicate_block_id.offset, block_matched->duplicate_block_id.size);
   
-  if ((block_matched->block_id.size != block_matched->duplicate_block_id.size) ||
-      (NULL != sync_storage_find (&server->data_blocks,
-				  offset_key (block_matched->duplicate_block_id.offset))))
-    {
-      DEBUG_MSG ("First duplicated block is not recieved yet.");
-      
-      status = send_block_request (server, &block_matched->block_id);
-    }
+  if (-1 == (long)src)
+    FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
   else
     {
-      unsigned char * src = mmap64 (NULL, block_matched->duplicate_block_id.size,
-				    PROT_READ, MAP_PRIVATE,
-				    server->connection->context->file_fd,
-				    block_matched->duplicate_block_id.offset);
-  
-      if (-1 == (long)src)
-	FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
-      else
+      unsigned char * dst = mapped_region_get_addr (server->connection->context, &block_matched->block_id);
+      if (dst != NULL)
 	{
-	  unsigned char * dst = mapped_region_get_addr (server->connection->context, &block_matched->block_id);
-	  if (dst != NULL)
-	    {
-	      memcpy (dst, src, block_matched->block_id.size);
-	      status = ST_SUCCESS;
-	    }
-	  if (0 != munmap (src, block_matched->duplicate_block_id.size))
-	    ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
+	  memcpy (dst, src, block_matched->block_id.size);
+	  status = ST_SUCCESS;
 	}
+      if (0 != munmap (src, block_matched->duplicate_block_id.size))
+	ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
     }
   
   return (status);
@@ -213,7 +214,7 @@ block_matched (server_t * server, block_matched_t * block_matched)
   
   if (block_matched->block_id.size <= MIN_BLOCK_SIZE)
     {
-      if (block_matched->duplicate)
+      if (block_matched->duplicate && (block_matched->block_id.size == block_matched->duplicate_block_id.size))
 	status = copy_duplicate (server, block_matched);
       else
 	status = send_block_request (server, &block_matched->block_id);
@@ -425,7 +426,7 @@ data_retrieval (void * arg)
   DEBUG_MSG ("Data retrieval thread has started.");
   
   memset (&block_id, 0, sizeof (block_id));
-  block_id.size = MIN_BLOCK_SIZE;
+  block_id.size = MAX_BLOCK_SIZE;
 
   for (block_id.offset = 0;
        block_id.offset < server->connection->context->size;
@@ -437,14 +438,11 @@ data_retrieval (void * arg)
       status = send_block_request (server, &block_id);
       if (ST_SUCCESS != status)
 	break;
-      
-      if (block_id.offset % MAX_BLOCK_SIZE == 0)
-	{
-	  pthread_mutex_lock (&server->tip_mutex);
-	  while (server->tip != 0)
-	    pthread_cond_wait (&server->tip_cond, &server->tip_mutex);
-	  pthread_mutex_unlock (&server->tip_mutex);
-	}
+
+      pthread_mutex_lock (&server->tip_mutex);
+      while (server->tip != 0)
+	pthread_cond_wait (&server->tip_cond, &server->tip_mutex);
+      pthread_mutex_unlock (&server->tip_mutex);
     }
 
   if (ST_SUCCESS == status)
@@ -500,9 +498,11 @@ task_producer (void * arg)
     {
       if (task.block_id.size > server->connection->context->size - task.block_id.offset)
 	task.block_id.size = server->connection->context->size - task.block_id.offset;
+
       status = task_push (server, &task);
       if (ST_SUCCESS != status)
 	break;
+      
       pthread_mutex_lock (&server->tip_mutex);
       while (server->tip != 0)
 	pthread_cond_wait (&server->tip_cond, &server->tip_mutex);

@@ -1,6 +1,9 @@
 #ifndef _TASK_QUEUE_H_
 #define _TASK_QUEUE_H_
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif /* HAVE_CONFIG_H */
 #include <millstone.h> /* status_t */
 #include <block.h> /* block_id_t */
 

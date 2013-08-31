@@ -82,17 +82,6 @@ read_file_meta (connection_t * connection)
       return (ST_FAILURE);
     }
 
-  connection->context->data = mmap64 (NULL, connection->context->size,
-				      PROT_WRITE, MAP_SHARED,
-				      connection->context->file_fd, 0);
-  
-  if (-1 == (long)connection->context->data)
-    {
-      FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
-      close (connection->context->file_fd);
-      return (ST_FAILURE);
-    }
-
   return (ST_SUCCESS);
 }
 

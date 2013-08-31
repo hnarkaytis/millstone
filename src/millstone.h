@@ -5,6 +5,7 @@
 #define _LARGEFILE64_SOURCE
 #endif /* _LARGEFILE64_SOURCE */
 
+#include <fcntl.h> /* off64_t */
 #include <stddef.h> /* size_t */
 #include <stdbool.h> /* bool */
 #include <netinet/in.h> /* struct sockaddr_in */
@@ -14,6 +15,10 @@
 #include <logging.h>
 
 #define DEFAULT_LISTEN_PORT (31415)
+
+#define SPLIT_RATIO (1 << 7)
+#define MIN_BLOCK_SIZE (1 << 12)
+#define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO * SPLIT_RATIO)
 
 #ifndef SD_BOTH
 #define SD_BOTH (2)
@@ -34,12 +39,20 @@ TYPEDEF_STRUCT (config_t,
 		int32_t compress_level,
 		)
 
+TYPEDEF_STRUCT (mapped_region_t,
+		(off64_t, offset),
+		(size_t, size),
+		int protect,
+		int flags,
+		NONE (uint8_t *, data),
+		)		
+
 TYPEDEF_STRUCT (context_t,
 		(config_t *, config),
 		(bool, file_exists),
 		int file_fd,
 		(size_t, size),
-		(uint8_t *, data),
+		(mapped_region_t, mapped_region),
 		)
 
 TYPEDEF_STRUCT (connection_t,

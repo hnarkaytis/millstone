@@ -1,12 +1,15 @@
 #ifndef _QUEUE_H_
 #define _QUEUE_H_
 
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif /* HAVE_CONFIG_H */
+#include <millstone.h> /* status_t */
+
 #include <stddef.h> /* size_t */
 #include <pthread.h>
 
 #include <metaresc.h>
-
-#include <millstone.h> /* status_t */
 
 TYPEDEF_STRUCT (queue_t,
 		(mr_rarray_t *, array),

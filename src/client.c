@@ -6,6 +6,7 @@
 #include <block.h>
 #include <msg.h>
 #include <file_meta.h>
+#include <mapped_region.h>
 #include <client.h>
 
 #include <stddef.h> /* size_t, ssize_t */
@@ -16,8 +17,8 @@
 #include <netdb.h> /* gethostbyname */
 #include <netinet/in.h> /* htonl, struct sockaddr_in */
 #include <sys/sysinfo.h> /* _SC_NPROCESSORS_ONLN */
-#include <sys/mman.h> /* mmap64, unmap */
 #include <sys/uio.h> /* writev, struct iovec */
+#include <sys/mman.h> /* mmap64, unmap */
 #include <sys/socket.h> /* socket, shutdown, connect */
 
 #include <openssl/sha.h> /* SHA1 */
@@ -29,13 +30,19 @@
 #include <metaresc.h>
 #include <mr_ic.h>
 
+TYPEDEF_STRUCT (dedup_t,
+		(mr_ic_t, sent_blocks),
+		(pthread_mutex_t, mutex),
+		(block_digest_t *, allocated_block_digest),
+		int mem_threshold,
+		)
+
 TYPEDEF_STRUCT (client_t,
 		(connection_t *, connection),
-		(mr_ic_t, sent_blocks),
-		(pthread_mutex_t, sent_blocks_lock),
 		(msg_queue_t, data_in),
 		(msg_queue_t, cmd_in),
 		(msg_queue_t, cmd_out),
+		(dedup_t, dedup),
 		)
 
 static mr_hash_value_t
@@ -57,10 +64,13 @@ static status_t
 send_block (client_t * client, block_id_t * block_id)
 {
   status_t status = ST_SUCCESS;
-  unsigned char * block_data = &client->connection->context->data[block_id->offset];
-  
+  unsigned char * block_data = mapped_region_get_addr (client->connection->context, block_id);
+
   DUMP_VAR (block_id_t, block_id);
 
+  if (NULL == block_data)
+    return (ST_FAILURE);
+  
 #ifdef HAVE_ZLIB
   Byte buffer[block_id->size << 1];
   uLongf length = sizeof (buffer);
@@ -113,6 +123,7 @@ client_data_writer (void * arg)
   client_t * client = arg;
 
   DEBUG_MSG ("Entered data writer.");
+  
   for (;;)
     {
       msg_t msg;
@@ -122,6 +133,7 @@ client_data_writer (void * arg)
       
       DUMP_VAR (msg_t, &msg);
       status = send_block (client, &msg.msg_data.block_id);
+      
       DEBUG_MSG ("Data block send status %d.", status);
 
       if (ST_SUCCESS != status)
@@ -135,6 +147,7 @@ client_data_writer (void * arg)
     }
 
   DEBUG_MSG ("Exiting client data writer.");
+  
   return (NULL);
 }
 
@@ -142,7 +155,9 @@ static void *
 client_cmd_writer (void * arg)
 {
   client_t * client = arg;
+  
   DEBUG_MSG ("Enter client command writer.");
+  
   for (;;)
     {
       msg_t msg;
@@ -154,12 +169,76 @@ client_cmd_writer (void * arg)
       status = msg_send (client->connection->cmd_fd, &msg);
       if (ST_SUCCESS != status)
 	break;
+      
       DEBUG_MSG ("Message sent.");
+      
     }
   
   shutdown (client->connection->cmd_fd, SD_BOTH);
+  
   DEBUG_MSG ("Exiting client command writer.");
+  
   return (NULL);
+}
+
+static status_t
+dedup_init (dedup_t * dedup)
+{
+  memset (dedup, 0, sizeof (*dedup));
+  pthread_mutex_init (&dedup->mutex, NULL);
+  dedup->allocated_block_digest = NULL;
+  mr_status_t mr_status = mr_ic_new (&dedup->sent_blocks, block_digest_hash, block_digest_cmp, "block_digest_t", MR_IC_HASH);
+  return ((MR_SUCCESS == mr_status) ? ST_SUCCESS : ST_FAILURE);
+}
+
+static mr_status_t
+free_sent_blocks (mr_ptr_t node, const void * context)
+{
+  MR_FREE (node.ptr);
+  return (MR_SUCCESS);
+}
+
+static void
+dedup_free (dedup_t * dedup)
+{
+  pthread_mutex_lock (&dedup->mutex);
+  mr_ic_foreach (&dedup->sent_blocks, free_sent_blocks, NULL);
+  mr_ic_free (&dedup->sent_blocks, NULL);
+  pthread_mutex_unlock (&dedup->mutex);
+}
+
+static block_id_t *
+dedup_check (dedup_t * dedup, block_digest_t * block_digest)
+{
+  block_id_t * dup_block_id = NULL;
+  long avphys_pages = sysconf (_SC_AVPHYS_PAGES);
+  static long phys_pages = 0;
+
+  if (0 == phys_pages)
+    phys_pages = sysconf (_SC_PHYS_PAGES);
+
+  if (100 * avphys_pages > phys_pages * dedup->mem_threshold)
+    {
+      pthread_mutex_lock (&dedup->mutex);
+      if (dedup->allocated_block_digest == NULL)
+	dedup->allocated_block_digest = MR_MALLOC (sizeof (*dedup->allocated_block_digest));
+      
+      if (dedup->allocated_block_digest != NULL)
+	{
+	  *dedup->allocated_block_digest = *block_digest;
+	  mr_ptr_t * find = mr_ic_add (&dedup->sent_blocks, dedup->allocated_block_digest, NULL);
+	  if (find != NULL)
+	    {
+	      block_digest_t * matched_block_digest = find->ptr;
+	      if (dedup->allocated_block_digest == matched_block_digest)
+		dedup->allocated_block_digest = NULL;
+	      else
+		dup_block_id = &matched_block_digest->block_id;
+	    }
+	}
+      pthread_mutex_unlock (&dedup->mutex);
+    }
+  return (dup_block_id);
 }
 
 static void *
@@ -167,8 +246,6 @@ digest_calculator (void * arg)
 {
   client_t * client = arg;
   block_digest_t block_digest;
-  block_digest_t * allocated_block_digest = NULL;
-  long phys_pages = sysconf (_SC_PHYS_PAGES);
   msg_t msg;
 
   DEBUG_MSG ("Entered digest calculator.");
@@ -184,53 +261,38 @@ digest_calculator (void * arg)
       DUMP_VAR (msg_t, &msg);
       
       block_digest.block_id = msg.msg_data.block_digest.block_id;
-      SHA1 (&client->connection->context->data[block_digest.block_id.offset],
-	    block_digest.block_id.size, (unsigned char*)&block_digest.digest);
+      unsigned char * block_data = mapped_region_get_addr (client->connection->context, &block_digest.block_id);
+      if (NULL == block_data)
+	break;
+      
+      SHA1 (block_data, block_digest.block_id.size, (unsigned char*)&block_digest.digest);
 
-      long avphys_pages = sysconf (_SC_AVPHYS_PAGES);
       msg.msg_type = MT_BLOCK_MATCHED;
       msg.msg_data.block_matched.matched = !memcmp (block_digest.digest, msg.msg_data.block_digest.digest, sizeof (block_digest.digest));
       msg.msg_data.block_matched.duplicate = FALSE;
 
       DEBUG_MSG ("Block on offset %zd matched status %d.",
 		 msg.msg_data.block_digest.block_id.offset, msg.msg_data.block_matched.matched);
-	  
-      if (100 * avphys_pages > phys_pages * client->connection->context->config->mem_threshold)
-	{
-	  if (allocated_block_digest == NULL)
-	    allocated_block_digest = MR_MALLOC (sizeof (*allocated_block_digest));
-	  if (allocated_block_digest != NULL)
-	    {
-	      *allocated_block_digest = block_digest;
-	      pthread_mutex_lock (&client->sent_blocks_lock);
-	      mr_ptr_t * find = mr_ic_add (&client->sent_blocks, allocated_block_digest, NULL);
-	      pthread_mutex_unlock (&client->sent_blocks_lock);
-	      if (find != NULL)
-		{
-		  block_digest_t * matched_block_digest = find->ptr;
-		  bool duplicate = (matched_block_digest != allocated_block_digest);
 
-		  if (!duplicate)
-		    allocated_block_digest = NULL;
-		  
-		  msg.msg_data.block_matched.duplicate = duplicate;
-		  msg.msg_data.block_matched.duplicate_block_id = matched_block_digest->block_id;
-		}
-	    }
+      block_id_t * matched_block_id = dedup_check (&client->dedup, &block_digest);
+      if (matched_block_id != NULL)
+	{
+	  msg.msg_data.block_matched.duplicate = TRUE;
+	  msg.msg_data.block_matched.duplicate_block_id = *matched_block_id;
 	}
       
       DEBUG_MSG ("Push message:");
       DUMP_VAR (msg_t, &msg);
+      
       status = queue_push (&client->cmd_out.queue, &msg);
       if (ST_SUCCESS != status)
 	break;
+      
       DEBUG_MSG ("Message pushed.");
     }
 
-  if (allocated_block_digest != NULL)
-    MR_FREE (allocated_block_digest);
-
   DEBUG_MSG ("Exiting digest calculator.");
+  
   return (NULL);
 }
 
@@ -242,7 +304,9 @@ client_cmd_reader (client_t * client)
   for (;;)
     {
       msg_t msg;
+      
       DEBUG_MSG ("Read from fd %d.", client->connection->cmd_fd);
+      
       status = msg_recv (client->connection->cmd_fd, &msg);
       if (ST_SUCCESS != status)
 	{
@@ -251,9 +315,11 @@ client_cmd_reader (client_t * client)
 	}
       
       DUMP_VAR (msg_t, &msg);
+      
       if (MT_TERMINATE == msg.msg_type)
 	{
 	  DEBUG_MSG ("Got termination command.");
+	  
 	  break;
 	}
       
@@ -273,7 +339,9 @@ client_cmd_reader (client_t * client)
       if (ST_SUCCESS != status)
 	break;
     }
+  
   DEBUG_MSG ("Exiting client command reader.");
+  
   return (status);
 }
 
@@ -285,6 +353,7 @@ start_data_writer (client_t * client)
   status_t status = ST_FAILURE;
 
   DEBUG_MSG ("Start server workers %d.", ncpu);
+  
   for (i = 0; i < ncpu; ++i)
     {
       int rv = pthread_create (&ids[i], NULL, client_data_writer, client);
@@ -293,14 +362,17 @@ start_data_writer (client_t * client)
     }
 
   DEBUG_MSG ("Started %d.", i);
+  
   if (i > 0)
     status = client_cmd_reader (client);
 
   DEBUG_MSG ("Canceling data writer.");
+  
   queue_cancel (&client->data_in.queue);
   queue_cancel (&client->cmd_out.queue);
   for (--i ; i >= 0; --i)
     pthread_join (ids[i], NULL);
+  
   DEBUG_MSG ("Command data canceled.");
 
   return (status);
@@ -316,13 +388,16 @@ start_cmd_writer (client_t * client)
       ERROR_MSG ("Failed to start command writer thread");
       return (ST_FAILURE);
     }
+  
   DEBUG_MSG ("Client command writer started %d.", rv);
 
   status_t status = start_data_writer (client);
   
   DEBUG_MSG ("Canceling command writer.");
+  
   queue_cancel (&client->cmd_out.queue);
   pthread_join (id, NULL);
+  
   DEBUG_MSG ("Command writer canceled.");
   
   return (status);
@@ -336,33 +411,32 @@ start_digest_calculators (client_t * client)
   status_t status = ST_FAILURE;
 
   DEBUG_MSG ("Starting digest calculators %d.", ncpu);
+  
   for (i = 0; i < ncpu; ++i)
     {
       int rv = pthread_create (&ids[i], NULL, digest_calculator, client);
+      
       DEBUG_MSG ("Creatd thread [%d] %d.", i, ids[i]);
+      
       if (rv != 0)
 	break;
     }
 
   DEBUG_MSG ("Started %d.", i);
+  
   if (i > 0)
     status = start_cmd_writer (client);
 
   DEBUG_MSG ("Canceling digest calculators.");
+  
   queue_cancel (&client->cmd_in.queue);
   queue_cancel (&client->cmd_out.queue);
   for (--i ; i >= 0; --i)
     pthread_join (ids[i], NULL);
+  
   DEBUG_MSG ("Digest calculators canceled.");
   
   return (status);
-}
-
-static mr_status_t
-free_sent_blocks (mr_ptr_t node, const void * context)
-{
-  MR_FREE (node.ptr);
-  return (MR_SUCCESS);
 }
 
 static status_t
@@ -377,6 +451,7 @@ run_session (connection_t * connection)
   client.connection = connection;
 
   DEBUG_MSG ("Sending file meata data.");
+  
   status_t status = send_file_meta (connection);
   if (ST_SUCCESS != status)
     return (status);
@@ -385,19 +460,16 @@ run_session (connection_t * connection)
   MSG_QUEUE_INIT (&client.cmd_in, cmd_in_array_data);
   MSG_QUEUE_INIT (&client.data_in, data_in_array_data);
 
-  pthread_mutex_init (&client.sent_blocks_lock, NULL);
-  mr_status_t mr_status = mr_ic_new (&client.sent_blocks, block_digest_hash, block_digest_cmp, "block_digest_t", MR_IC_HASH);
-
-  DEBUG_MSG ("Session inited.");
-  if (MR_SUCCESS == mr_status)
+  status = dedup_init (&client.dedup);
+  
+  DEBUG_MSG ("Session inited with status %d.", status);
+  
+  if (ST_SUCCESS == status)
     {
       status = start_digest_calculators (&client);
-      
-      pthread_mutex_lock (&client.sent_blocks_lock);
-      mr_ic_foreach (&client.sent_blocks, free_sent_blocks, NULL);
-      mr_ic_free (&client.sent_blocks, NULL);
-      pthread_mutex_unlock (&client.sent_blocks_lock);
+      dedup_free (&client.dedup);
     }
+  
   DEBUG_MSG ("Session done.");
 
   return (status);
@@ -417,8 +489,10 @@ configure_data_connection (connection_t * connection)
   getsockname (connection->data_fd, (struct sockaddr *)&connection->local, &socklen); 
 
   DEBUG_MSG ("Connected data socket. Local port is %04x.", connection->local.sin_port);
+  
   status_t status = run_session (connection);
   shutdown (connection->data_fd, SD_BOTH);
+  
   DEBUG_MSG ("Shutdown data socket.");
 
   return (status);
@@ -435,8 +509,10 @@ create_data_socket (connection_t * connection)
     }
 
   DEBUG_MSG ("Created data socket.");
+  
   status_t status = configure_data_connection (connection);
   close (connection->data_fd);
+  
   DEBUG_MSG ("Closed data socket.");
   
   return (status);
@@ -490,10 +566,12 @@ create_server_socket (context_t * context)
     }
 
   DEBUG_MSG ("Created command socket.");
+  
   status_t status = connect_to_server (&connection);
   close (connection.cmd_fd);
 
   DEBUG_MSG ("Close command socket.");
+  
   return (status);
 }
 
@@ -508,27 +586,23 @@ run_client (config_t * config)
   context.file_fd = open64 (config->src_file, O_RDONLY);
   if (context.file_fd <= 0)
     {
-      ERROR_MSG ("Can't open source file '%s'.", config->src_file);
+      FATAL_MSG ("Can't open source file '%s'.", config->src_file);
       return (ST_FAILURE);
     }
 
   DUMP_VAR (context_t, &context);
   
   context.size = lseek64 (context.file_fd, 0, SEEK_END);
-  context.data = mmap64 (NULL, context.size, PROT_READ, MAP_PRIVATE, context.file_fd, 0);
-  
-  if (-1 == (long)context.data)
-    FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
-  else
-    {
-      status = create_server_socket (&context);
 
-      if (0 != munmap (context.data, context.size))
-	ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
-    }
+  mapped_region_init (&context.mapped_region, PROT_READ, MAP_PRIVATE);
+
+  status = create_server_socket (&context);
+
+  mapped_region_free (&context.mapped_region);
   
   close (context.file_fd);
 
   DEBUG_MSG ("Exiting client.");
+  
   return (status);
 }

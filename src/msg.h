@@ -1,15 +1,14 @@
 #ifndef _MSG_H_
 #define _MSG_H_
 
-#include <metaresc.h>
-
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif /* HAVE_CONFIG_H */
 #include <millstone.h> /* status_t */
 #include <block.h> /* block_*_t */
 #include <queue.h> /* queue_t */
 
-#define SPLIT_RATIO (1 << 8)
-#define MIN_BLOCK_SIZE (1 << 10)
-#define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO * SPLIT_RATIO)
+#include <metaresc.h>
 
 #define MSG_OUT_QUEUE_SIZE (1 << 1)
 #define MSG_IN_QUEUE_SIZE (MAX_BLOCK_SIZE / MIN_BLOCK_SIZE)

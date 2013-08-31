@@ -9,6 +9,7 @@
 /config.h.in~
 /file_meta.o
 /logging.o
+/mapped_region.o
 /millstone
 /millstone.o
 /msg.o

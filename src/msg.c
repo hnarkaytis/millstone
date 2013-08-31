@@ -11,13 +11,12 @@ status_t
 msg_recv (int fd, msg_t * msg)
 {
   char * msg_buf = (char*)msg;
-  ssize_t size = 0;
-  while (size != sizeof (*msg))
+  ssize_t size, rv;
+  for (size = 0; size != sizeof (*msg); size += rv)
     {
-      ssize_t rv = TEMP_FAILURE_RETRY (read (fd, &msg_buf[size], sizeof (*msg) - size));
+      rv = TEMP_FAILURE_RETRY (read (fd, &msg_buf[size], sizeof (*msg) - size));
       if (rv <= 0)
 	return (ST_FAILURE);
-      size += rv;
     }
   return (ST_SUCCESS);
 }
@@ -26,13 +25,12 @@ status_t
 msg_send (int fd, msg_t * msg)
 {
   char * msg_buf = (char*)msg;
-  ssize_t size = 0;
-  while (size != sizeof (*msg))
+  ssize_t size, rv;
+  for (size = 0; size != sizeof (*msg); size += rv)
     {
-      ssize_t rv = TEMP_FAILURE_RETRY (write (fd, &msg_buf[size], sizeof (*msg) - size));
+      rv = TEMP_FAILURE_RETRY (write (fd, &msg_buf[size], sizeof (*msg) - size));
       if (rv <= 0)
 	return (ST_FAILURE);
-      size += rv;
     }
   return (ST_SUCCESS);
 }

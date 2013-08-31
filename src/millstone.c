@@ -29,6 +29,7 @@ parse_args (int argc, char * argv[], config_t * config)
       /* These options set a flag. */
       {"compress", required_argument, NULL, 'c'},
       {"log-level", required_argument, NULL, 'l'},
+      {"memory-threshold", required_argument, NULL, 'm'},
       {0, 0, 0, 0}
     };
   /* `getopt_long' stores the option index here. */
@@ -58,6 +59,11 @@ parse_args (int argc, char * argv[], config_t * config)
 	  config->compress_level = atoi (optarg);
 	break;
 	
+      case 'm':
+	if (optarg)
+	  config->mem_threshold = atoi (optarg);
+	break;
+	
       case 'l':
 	{
 	  log_level_t log_level = get_log_level (optarg);
@@ -68,7 +74,7 @@ parse_args (int argc, char * argv[], config_t * config)
       }
 
 #ifndef HAVE_ZLIB
-  config->compress_level = 0;
+  config->compress_level = DEFAULT_COMPRESS_LEVEL;
 #endif /* HAVE_ZLIB */
   
   if (argc - optind == 0)
@@ -115,12 +121,15 @@ parse_args (int argc, char * argv[], config_t * config)
 int main (int argc, char * argv[])
 {
   config_t config;
+  
   DEBUG_MSG ("Start Millstone. Parse params.");
+  
   status_t status = parse_args (argc, argv, &config);
   if (ST_SUCCESS != status)
     return (EXIT_FAILURE);
 
   DUMP_VAR (config_t, &config);
+  
   switch (config.run_mode)
     {
     case RM_SERVER:
@@ -133,6 +142,7 @@ int main (int argc, char * argv[])
       status = ST_FAILURE;
       break;
     }
+  
   DEBUG_MSG ("Stop Millstone.");
 
   return ((ST_SUCCESS != status) ? EXIT_FAILURE : EXIT_SUCCESS);

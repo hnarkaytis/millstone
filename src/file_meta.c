@@ -107,4 +107,3 @@ send_file_meta (connection_t * connection)
     }
   return (status);
 }
-

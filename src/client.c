@@ -274,15 +274,18 @@ digest_calculator (void * arg)
       DEBUG_MSG ("Block on offset %zd matched status %d.",
 		 msg.msg_data.block_digest.block_id.offset, msg.msg_data.block_matched.matched);
 
-      block_id_t * matched_block_id = dedup_check (&client->dedup, &block_digest);
-      if (matched_block_id != NULL)
-	{
-	  msg.msg_data.block_matched.duplicate = TRUE;
-	  msg.msg_data.block_matched.duplicate_block_id = *matched_block_id;
-	}
-
       if (msg.msg_data.block_matched.matched)
 	dedup_add (&client->dedup, &block_digest);
+      else
+	{
+	  block_id_t * matched_block_id = dedup_check (&client->dedup, &block_digest);
+	  if (matched_block_id != NULL)
+	    {
+	      msg.msg_data.block_matched.duplicate = TRUE;
+	      msg.msg_data.block_matched.duplicate_block_id = *matched_block_id;
+	    }
+	}
+
       
       DEBUG_MSG ("Push message:");
       DUMP_VAR (msg_t, &msg);
@@ -510,6 +513,7 @@ create_data_socket (connection_t * connection)
   DEBUG_MSG ("Created data socket.");
   
   status_t status = configure_data_connection (connection);
+  
   close (connection->data_fd);
   
   DEBUG_MSG ("Closed data socket.");

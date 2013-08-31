@@ -64,5 +64,9 @@ mapped_region_get_addr (context_t * context, block_id_t * block_id)
       else
 	mapped_region->data = data;
     }
-  return (&mapped_region->data[block_id->offset - mapped_region->offset]);
+  
+  if (NULL == mapped_region->data)
+    return (NULL);
+  else
+    return (&mapped_region->data[block_id->offset - mapped_region->offset]);
 }

@@ -689,6 +689,7 @@ run_accepter (server_ctx_t * server_ctx)
       pthread_attr_init (&attr);
       pthread_attr_setdetachstate (&attr, PTHREAD_CREATE_DETACHED);
       
+      pthread_mutex_init (&accepter_ctx.mutex, NULL);
       pthread_mutex_lock (&accepter_ctx.mutex);
       rv = pthread_create (&id, &attr, handle_client, &accepter_ctx);
       

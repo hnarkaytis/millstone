@@ -186,7 +186,7 @@ dedup_init (dedup_t * dedup, int mem_threshold)
   memset (dedup, 0, sizeof (*dedup));
   dedup->mem_threshold = mem_threshold;
   pthread_mutex_init (&dedup->mutex, NULL);
-  mr_status_t mr_status = mr_ic_new (&dedup->sent_blocks, block_digest_hash, block_digest_cmp, "block_digest_t", MR_IC_HASH);
+  mr_status_t mr_status = mr_ic_new (&dedup->sent_blocks, block_digest_hash, block_digest_cmp, "block_digest_t", MR_IC_HASH_TREE);
   return ((MR_SUCCESS == mr_status) ? ST_SUCCESS : ST_FAILURE);
 }
 

@@ -55,25 +55,48 @@ TYPEDEF_STRUCT (accepter_ctx_t,
 		)
 
 int
-offset_key_compar (const long x, const long y, const void * null)
+block_id_compar (const mr_ptr_t x, const mr_ptr_t y, const void * null)
 {
-  return ((x > y) - (y > x));
+  block_id_t * x_ = x.ptr;
+  block_id_t * y_ = y.ptr;
+  int cmp = (x_->offset > y_->offset) - (x_->offset < y_->offset);
+  if (cmp)
+    return (cmp);
+  cmp = (x_->size > y_->size) - (x_->size < y_->size);
+  return (cmp);
 }
 
 mr_hash_value_t
-offset_key_hash (const long x, const void * null)
+block_id_hash (const mr_ptr_t x, const void * null)
 {
-  return (x);
+  block_id_t * x_ = x.ptr;
+  return (x_->offset / MIN_TRANSFER_BLOCK_SIZE);
 }
 
-static long
-offset_key (off64_t offset)
+void
+block_id_free (const mr_ptr_t x, const void * null)
 {
-  return (offset / TRANSFER_BLOCK_SIZE);
+  MR_FREE (x.ptr);
+}
+
+status_t
+block_id_register (sync_storage_t * sync_storage, block_id_t * block_id)
+{
+  block_id_t * alloc_block_id = MR_MALLOC (sizeof (*block_id));
+  if (NULL == alloc_block_id)
+    {
+      FATAL_MSG ("Out of memory.");
+      return (ST_FAILURE);
+    }
+  *alloc_block_id = *block_id;
+  status_t status = sync_storage_add (sync_storage, alloc_block_id);
+  if (ST_SUCCESS != status)
+    MR_FREE (alloc_block_id);
+  return (status);
 }
 
 int
-addr_compar (const mr_ptr_t x, const mr_ptr_t y, const void * null)
+server_compar (const mr_ptr_t x, const mr_ptr_t y, const void * null)
 {
   server_t * server_x = x.ptr;
   server_t * server_y = y.ptr;
@@ -89,7 +112,7 @@ addr_compar (const mr_ptr_t x, const mr_ptr_t y, const void * null)
 }
 
 mr_hash_value_t
-addr_hash (const mr_ptr_t key, const void * context)
+server_hash (const mr_ptr_t key, const void * context)
 {
   server_t * server = key.ptr;
   struct sockaddr_in * addr = &server->connection->remote;
@@ -159,9 +182,11 @@ send_block_request (server_t * server, block_id_t * block_id)
     {
       if (msg.msg_data.block_id.size > block_id->size + (msg.msg_data.block_id.offset - block_id->offset))
 	msg.msg_data.block_id.size = block_id->size + (msg.msg_data.block_id.offset - block_id->offset);
-      status = sync_storage_add (&server->data_blocks, offset_key (msg.msg_data.block_id.offset));
+      
+      status = block_id_register (&server->data_blocks, &msg.msg_data.block_id);
       if (ST_SUCCESS != status)
 	break;
+      
       status = msg_push (server, &msg);
       if (ST_SUCCESS != status)
 	break;
@@ -244,7 +269,7 @@ block_sent (server_t * server, block_id_t * block_id)
   
   DEBUG_MSG ("Got confirmation for block %zd:%zd.", block_id->offset, block_id->size);
   
-  if (NULL != sync_storage_find (&server->data_blocks, offset_key (block_id->offset)))
+  if (NULL != sync_storage_find (&server->data_blocks, block_id))
     {
       DEBUG_MSG ("Packet lost for offset 0x%zx.", block_id->offset);
       
@@ -281,7 +306,7 @@ server_cmd_reader (void * arg)
 	case MT_BLOCK_SEND_ERROR:
 	  ERROR_MSG ("Client failed to send data block (offset %zd size %zd).",
 		     msg.msg_data.block_id.offset, msg.msg_data.block_id.size);
-	  sync_storage_del (&server->data_blocks, offset_key (msg.msg_data.block_id.offset));
+	  sync_storage_del (&server->data_blocks, &msg.msg_data.block_id);
 	  break;
 	default:
 	  status = ST_FAILURE;
@@ -599,7 +624,7 @@ handle_client (void * arg)
   
   server.server_ctx = accepter_ctx.server_ctx;
   
-  sync_storage_init (&server.data_blocks, offset_key_compar, offset_key_hash, "long_int_t", NULL);
+  sync_storage_init (&server.data_blocks, block_id_compar, block_id_hash, block_id_free, "block_id_t", NULL);
   
   msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
   MSG_QUEUE_INIT (&server.cmd_out, cmd_out_array_data);
@@ -619,6 +644,7 @@ handle_client (void * arg)
       if (ST_SUCCESS == status)
 	status = start_cmd_reader (&server);
 
+      sync_storage_del (&server.server_ctx->clients, &server);
       mapped_region_free (&context.mapped_region);
       close (context.file_fd);
     }
@@ -628,8 +654,8 @@ handle_client (void * arg)
 
   task_queue_cancel (&server.task_queue); /* free allocated slots */
   
-  sync_storage_free (&server.data_blocks, NULL);
-  
+  sync_storage_free (&server.data_blocks);
+
   DEBUG_MSG ("Closed connection to client: %08x:%04x.", accepter_ctx.remote.sin_addr.s_addr, accepter_ctx.remote.sin_port);
   
   return (NULL);
@@ -679,7 +705,10 @@ run_accepter (server_ctx_t * server_ctx)
       if (accepter_ctx.fd < 0)
 	{
 	  ERROR_MSG ("accept failed errno(%d) '%s'.", errno, strerror (errno));
-	  continue;
+	  if (EBADF == errno)
+	    break;
+	  else
+	    continue;
 	}
 
       DEBUG_MSG ("New client from: %08x:%04x.", accepter_ctx.remote.sin_addr.s_addr, accepter_ctx.remote.sin_port);
@@ -726,6 +755,7 @@ create_server_socket (server_ctx_t * server_ctx)
 
   status = run_accepter (server_ctx);
   
+  shutdown (server_ctx->server_sock, SD_BOTH);
   close (server_ctx->server_sock);
   
   DEBUG_MSG ("Server socket closed.");
@@ -788,7 +818,7 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
     }
   
   /* unregister block in registry */
-  sync_storage_del (&server->data_blocks, offset_key (block_id->offset));
+  sync_storage_del (&server->data_blocks, block_id);
   
   DEBUG_MSG ("Write block done.");
   
@@ -894,7 +924,7 @@ run_server (config_t * config)
   server_ctx.server_name.sin_port = htons (config->listen_port);
   server_ctx.server_name.sin_addr.s_addr = htonl (INADDR_ANY);
 
-  sync_storage_init (&server_ctx.clients, addr_compar, addr_hash, "server_t", NULL);
+  sync_storage_init (&server_ctx.clients, server_compar, server_hash, NULL, "server_t", NULL);
 
   /* if one of the clients unexpectedly terminates
      server should ignore SIGPIPE */
@@ -921,7 +951,7 @@ run_server (config_t * config)
     ERROR_MSG ("bind failed errno(%d) '%s'.", errno, strerror (errno));
   
   close (server_ctx.data_sock);
-  sync_storage_free (&server_ctx.clients, NULL);
+  sync_storage_free (&server_ctx.clients);
   
   DEBUG_MSG ("Closed data socket. Exiting server.");
   

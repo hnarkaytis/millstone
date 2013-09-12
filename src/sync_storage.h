@@ -20,13 +20,14 @@ TYPEDEF_STRUCT (sync_storage_t,
 		(char *, key_type),
 		(mr_compar_fn_t, compar_fn),
 		(mr_hash_fn_t, hash_fn),
+		(mr_free_fn_t, free_fn),
 		(void *, context),
 		)
 
 extern status_t sync_storage_add (sync_storage_t * sync_storage, mr_ptr_t mr_ptr);
 extern void sync_storage_del (sync_storage_t * sync_storage, mr_ptr_t mr_ptr);
 extern mr_ptr_t * sync_storage_find (sync_storage_t * sync_storage, mr_ptr_t mr_ptr);
-extern void sync_storage_init (sync_storage_t * sync_storage, mr_compar_fn_t compar_fn, mr_hash_fn_t hash_fn, char * key_type, void * context);
-extern void sync_storage_free (sync_storage_t * sync_storage, mr_free_fn_t free_fn);
+extern void sync_storage_init (sync_storage_t * sync_storage, mr_compar_fn_t compar_fn, mr_hash_fn_t hash_fn, mr_free_fn_t free_fn, char * key_type, void * context);
+extern void sync_storage_free (sync_storage_t * sync_storage);
 
 #endif /* _SYNC_STORAGE_H_ */

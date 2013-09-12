@@ -20,12 +20,12 @@ sync_storage_add (sync_storage_t * sync_storage, mr_ptr_t mr_ptr)
   sync_rb_tree_t * bucket = get_backet (sync_storage, mr_ptr);
   pthread_mutex_lock (&bucket->mutex);
   void * find = mr_tsearch (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
+  pthread_mutex_unlock (&bucket->mutex);
   if (NULL == find)
     {
       FATAL_MSG ("Out of memory.");
       status = ST_FAILURE;
     }
-  pthread_mutex_unlock (&bucket->mutex);
   return (status);
 }
 
@@ -34,7 +34,18 @@ sync_storage_del (sync_storage_t * sync_storage, mr_ptr_t mr_ptr)
 {
   sync_rb_tree_t * bucket = get_backet (sync_storage, mr_ptr);
   pthread_mutex_lock (&bucket->mutex);
-  mr_tdelete (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
+  if (sync_storage->free_fn == NULL)
+    mr_tdelete (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
+  else
+    {
+      mr_ptr_t * find = mr_tfind (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
+      if (find != NULL)
+	{
+	  mr_ptr_t found_node = *find;
+	  mr_tdelete (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
+	  sync_storage->free_fn (found_node, sync_storage->context);
+	}
+    }
   pthread_mutex_unlock (&bucket->mutex);
 }
 
@@ -49,7 +60,7 @@ sync_storage_find (sync_storage_t * sync_storage, mr_ptr_t mr_ptr)
 }
 
 void
-sync_storage_init (sync_storage_t * sync_storage, mr_compar_fn_t compar_fn, mr_hash_fn_t hash_fn, char * key_type, void * context)
+sync_storage_init (sync_storage_t * sync_storage, mr_compar_fn_t compar_fn, mr_hash_fn_t hash_fn, mr_free_fn_t free_fn, char * key_type, void * context)
 {
   int i;
   memset (sync_storage, 0, sizeof (sync_storage));
@@ -60,6 +71,7 @@ sync_storage_init (sync_storage_t * sync_storage, mr_compar_fn_t compar_fn, mr_h
     }
   sync_storage->compar_fn = compar_fn;
   sync_storage->hash_fn = hash_fn;
+  sync_storage->free_fn = free_fn;
   sync_storage->key_type = key_type;
   sync_storage->context = context;
 }
@@ -70,11 +82,14 @@ dummy_free_fn (mr_ptr_t key, const void * context)
 }
 
 void
-sync_storage_free (sync_storage_t * sync_storage, mr_free_fn_t free_fn)
+sync_storage_free (sync_storage_t * sync_storage)
 {
   int i;
+  mr_free_fn_t free_fn = sync_storage->free_fn;
+  
   if (NULL == free_fn)
     free_fn = dummy_free_fn;
+  
   for (i = 0; i < sizeof (sync_storage->table) / sizeof (sync_storage->table[0]); ++i)
     {
       pthread_mutex_lock (&sync_storage->table[i].mutex);

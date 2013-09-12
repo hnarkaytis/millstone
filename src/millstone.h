@@ -12,6 +12,8 @@
 #include <netinet/in.h> /* struct sockaddr_in */
 #include <sys/user.h> /* PAGE_SIZE */
 
+#include <pthread.h>
+
 #include <metaresc.h>
 
 #include <logging.h>
@@ -21,9 +23,6 @@
 #define SPLIT_RATIO (1 << 7)
 #define MIN_BLOCK_SIZE (PAGE_SIZE)
 #define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO * SPLIT_RATIO)
-#define MIN_TRANSFER_BLOCK_SIZE (1 << 9)
-#define MAX_TRANSFER_BLOCK_SIZE (MIN_BLOCK_SIZE)
-#define TRANSFER_BLOCK_SIZE (1 << 10)
 
 #ifndef SD_BOTH
 #define SD_BOTH (2)
@@ -47,6 +46,7 @@ TYPEDEF_STRUCT (config_t,
 TYPEDEF_STRUCT (mapped_region_t,
 		(off64_t, offset),
 		(size_t, size),
+		(pthread_mutex_t, mutex),
 		int protect,
 		int flags,
 		NONE (uint8_t *, data),
@@ -78,7 +78,7 @@ TYPEDEF_STRUCT (connection_t,
     })
 
 #if defined COMPILE_LOG_LEVEL_LL_ALL || defined COMPILE_LOG_LEVEL_LL_TRACE || defined COMPILE_LOG_LEVEL_LL_DEBUG
-#defined DUMP_VAR(...) DUMP_VAR_ (DEBUG_MSG, __VA_ARGS__)
+#define DUMP_VAR(...) DUMP_VAR_ (DEBUG_MSG, __VA_ARGS__)
 #else
 #define DUMP_VAR _OFF_MSG
 #endif

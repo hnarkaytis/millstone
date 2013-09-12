@@ -10,12 +10,15 @@
 #include <errno.h> /* errno */
 #include <string.h> /* memset, setlen, strerror */
 
+#include <pthread.h>
+
 void
 mapped_region_init (mapped_region_t * mapped_region, int protect, int flags)
 {
   memset (mapped_region, 0, sizeof (*mapped_region));
   mapped_region->protect = protect;
   mapped_region->flags = flags;
+  pthread_mutex_init (&mapped_region->mutex, NULL);
 }
 
 void
@@ -33,10 +36,12 @@ unsigned char *
 mapped_region_get_addr (context_t * context, block_id_t * block_id)
 {
   mapped_region_t * mapped_region = &context->mapped_region;
-  
+  unsigned char * addr = NULL;
+
+  pthread_mutex_lock (&mapped_region->mutex);
   if ((NULL == mapped_region->data) ||
-      !((block_id->offset >= mapped_region->offset) &&
-	(block_id->offset + block_id->size <= mapped_region->offset + mapped_region->size)))
+      (block_id->offset < mapped_region->offset) ||
+      (block_id->offset + block_id->size > mapped_region->offset + mapped_region->size))
     {  
       if (mapped_region->data != NULL)
 	{
@@ -46,11 +51,11 @@ mapped_region_get_addr (context_t * context, block_id_t * block_id)
   
       mapped_region->data = NULL;
       /* allign mapping region offset on a boundary of MAX_BLOCK_SIZE */
-      mapped_region->offset = block_id->offset - block_id->offset % MAX_BLOCK_SIZE;
+      mapped_region->offset = block_id->offset - (block_id->offset % MAX_BLOCK_SIZE);
 
       mapped_region->size = MAX_BLOCK_SIZE;
-      if (mapped_region->size < block_id->size + (mapped_region->offset - block_id->offset))
-	mapped_region->size = block_id->size + (mapped_region->offset - block_id->offset);
+      if (mapped_region->size < block_id->size + (block_id->offset - mapped_region->offset))
+	mapped_region->size = block_id->size + (block_id->offset - mapped_region->offset);
       /* trim mapping size by file size */
       if (mapped_region->size > context->size - mapped_region->offset)
 	mapped_region->size = context->size - mapped_region->offset;
@@ -65,8 +70,8 @@ mapped_region_get_addr (context_t * context, block_id_t * block_id)
 	mapped_region->data = data;
     }
   
-  if (NULL == mapped_region->data)
-    return (NULL);
-  else
-    return (&mapped_region->data[block_id->offset - mapped_region->offset]);
+  if (NULL != mapped_region->data)
+    addr = &mapped_region->data[block_id->offset - mapped_region->offset];
+  pthread_mutex_unlock (&mapped_region->mutex);
+  return (addr);
 }

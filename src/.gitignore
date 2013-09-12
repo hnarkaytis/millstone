@@ -13,6 +13,7 @@
 /millstone
 /millstone.o
 /msg.o
+/mtu_tune.o
 /queue.o
 /server.o
 /stamp-h1

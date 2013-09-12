@@ -10,6 +10,7 @@
 #include <sync_storage.h>
 #include <task_queue.h>
 #include <mapped_region.h>
+#include <mtu_tune.h>
 #include <server.h>
 
 #include <stddef.h> /* size_t, ssize_t */
@@ -40,6 +41,7 @@ TYPEDEF_STRUCT (server_t,
 		(msg_queue_t, cmd_out),
 		(task_queue_t, task_queue),
 		(sync_storage_t, data_blocks),
+		(mtu_tune_t, mtu_tune),
 		(server_ctx_t *, server_ctx),
 		int tip,
 		(pthread_cond_t, tip_cond),
@@ -172,7 +174,6 @@ send_block_request (server_t * server, block_id_t * block_id)
   msg_t msg;
   memset (&msg, 0, sizeof (msg));
   msg.msg_type = MT_BLOCK_REQUEST;
-  msg.msg_data.block_id.size = TRANSFER_BLOCK_SIZE;
   
   DUMP_VAR (msg_t, &msg);
   
@@ -180,8 +181,9 @@ send_block_request (server_t * server, block_id_t * block_id)
        msg.msg_data.block_id.offset < block_id->offset + block_id->size;
        msg.msg_data.block_id.offset += msg.msg_data.block_id.size)
     {
-      if (msg.msg_data.block_id.size > block_id->size + (msg.msg_data.block_id.offset - block_id->offset))
-	msg.msg_data.block_id.size = block_id->size + (msg.msg_data.block_id.offset - block_id->offset);
+      msg.msg_data.block_id.size = block_id->size - (msg.msg_data.block_id.offset - block_id->offset);
+
+      mtu_tune_set_size (&server->mtu_tune, &msg.msg_data.block_id);
       
       status = block_id_register (&server->data_blocks, &msg.msg_data.block_id);
       if (ST_SUCCESS != status)
@@ -266,10 +268,12 @@ static status_t
 block_sent (server_t * server, block_id_t * block_id)
 {
   status_t status = ST_SUCCESS;
+  bool failure = (NULL != sync_storage_find (&server->data_blocks, block_id));
   
   DEBUG_MSG ("Got confirmation for block %zd:%zd.", block_id->offset, block_id->size);
   
-  if (NULL != sync_storage_find (&server->data_blocks, block_id))
+  mtu_tune_log (&server->mtu_tune, block_id->size, failure);
+  if (failure)
     {
       DEBUG_MSG ("Packet lost for offset 0x%zx.", block_id->offset);
       
@@ -300,13 +304,11 @@ server_cmd_reader (void * arg)
 	case MT_BLOCK_MATCHED:
 	  status = block_matched (server, &msg.msg_data.block_matched);
 	  break;
-	case MT_BLOCK_SENT:
-	  status = block_sent (server, &msg.msg_data.block_id);
-	  break;
 	case MT_BLOCK_SEND_ERROR:
 	  ERROR_MSG ("Client failed to send data block (offset %zd size %zd).",
 		     msg.msg_data.block_id.offset, msg.msg_data.block_id.size);
-	  sync_storage_del (&server->data_blocks, &msg.msg_data.block_id);
+	case MT_BLOCK_SENT:
+	  status = block_sent (server, &msg.msg_data.block_id);
 	  break;
 	default:
 	  status = ST_FAILURE;
@@ -411,13 +413,13 @@ server_cmd_writer (server_t * server)
 static status_t
 start_workers (server_t * server)
 {
-  int i, ncpu = (long) sysconf (_SC_NPROCESSORS_ONLN);
-  pthread_t ids[ncpu];
+  int i, workers = (long) sysconf (_SC_NPROCESSORS_ONLN);
+  pthread_t ids[workers];
   status_t status = ST_FAILURE;
 
-  DEBUG_MSG ("Start server workers %d.", ncpu);
+  DEBUG_MSG ("Start server workers %d.", workers);
   
-  for (i = 0; i < ncpu; ++i)
+  for (i = 0; i < workers; ++i)
     {
       int rv = pthread_create (&ids[i], NULL, server_worker, server);
       if (rv != 0)
@@ -625,6 +627,7 @@ handle_client (void * arg)
   server.server_ctx = accepter_ctx.server_ctx;
   
   sync_storage_init (&server.data_blocks, block_id_compar, block_id_hash, block_id_free, "block_id_t", NULL);
+  mtu_tune_init (&server.mtu_tune);
   
   msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
   MSG_QUEUE_INIT (&server.cmd_out, cmd_out_array_data);
@@ -771,24 +774,29 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
   typeof (server->connection->context->config->compress_level) * compress_level = (void*)&buf[sizeof (*block_id)];
   int size = buf_size - sizeof (*block_id) - sizeof (*compress_level);
   unsigned char * src = &buf[sizeof (*block_id) + sizeof (*compress_level)];
-  unsigned char * dst = mapped_region_get_addr (server->connection->context, block_id);
 
-  if (NULL == dst)
-    return (ST_FAILURE);
-  
+  DEBUG_MSG ("Write block at offset 0x%zx size %zd.", block_id->offset, block_id->size);
+
   if (size < 0)
     {
       ERROR_MSG ("Recieved block is too small.");
       return (ST_FAILURE);
     }
 
-  DEBUG_MSG ("Write block at offset 0x%zx size %zd.", block_id->offset, block_id->size);
-
+  off64_t map_offset = block_id->offset - (block_id->offset % PAGE_SIZE);
+  size_t map_size = block_id->size + (block_id->offset - map_offset);
+  unsigned char * dst = mmap64 (NULL, map_size, PROT_WRITE, MAP_SHARED, server->connection->context->file_fd, map_offset);
+  if (-1 == (long)dst)
+    {
+      FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+      return (ST_FAILURE);
+    }
+  
 #ifdef HAVE_ZLIB
   if (*compress_level > 0)
     {
       uLong length = block_id->size;
-      int z_status = uncompress (dst, &length, src, size);
+      int z_status = uncompress (&dst[block_id->offset - map_offset], &length, src, size);
       if (Z_OK != z_status)
 	{
 	  ERROR_MSG ("Failed to uncompressed recieved block.");
@@ -814,8 +822,11 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
 	  ERROR_MSG ("Recieved block size mismatched target size (%d != %d).", size, block_id->size);
 	  status = ST_FAILURE;
 	}
-      memcpy (dst, src, block_id->size);
+      memcpy (&dst[block_id->offset - map_offset], src, block_id->size);
     }
+  
+  if (0 != munmap (dst, map_size))
+    ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
   
   /* unregister block in registry */
   sync_storage_del (&server->data_blocks, block_id);
@@ -829,7 +840,7 @@ static void *
 server_data_reader (void * arg)
 {
   server_ctx_t * server_ctx = arg;
-  unsigned char buf[1 << 16];
+  unsigned char buf[1 << (MAX_TRANSFER_BLOCK_SIZE_BITS + 1)];
   connection_t connection;
   server_t server;
 
@@ -865,7 +876,7 @@ server_data_reader (void * arg)
       mr_ptr_t * find = sync_storage_find (&server_ctx->clients, &server);
       if (NULL == find)
 	{
-	  ERROR_MSG ("Unknown client.");
+	  DEBUG_MSG ("Unknown or disconnected client.");
 	  continue;
 	}
       
@@ -879,13 +890,13 @@ server_data_reader (void * arg)
 static status_t
 start_data_readers (server_ctx_t * server_ctx)
 {
-  int i;
-  pthread_t ids[DATA_READERS];
+  int i, workers = (long) sysconf (_SC_NPROCESSORS_ONLN);
+  pthread_t ids[workers];
   status_t status = ST_FAILURE;
 
-  DEBUG_MSG ("Starting %d data readers.", sizeof (ids) / sizeof (ids[0]));
+  DEBUG_MSG ("Starting %d data readers.", workers);
   
-  for (i = 0; i < sizeof (ids) / sizeof (ids[0]); ++i)
+  for (i = 0; i < workers; ++i)
     {
       int rv = pthread_create (&ids[i], NULL, server_data_reader, server_ctx);
       if (rv != 0)

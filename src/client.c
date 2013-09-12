@@ -98,8 +98,11 @@ send_block (client_t * client, block_id_t * block_id)
 	  iov[2].iov_base = buffer;
 	}
 #endif /* HAVE_ZLIB */
-	  
-      ssize_t rv = TEMP_FAILURE_RETRY (writev (client->connection->data_fd, iov, sizeof (iov) / sizeof (iov[0])));
+
+      ssize_t rv;
+      do {
+	rv = TEMP_FAILURE_RETRY (writev (client->connection->data_fd, iov, sizeof (iov) / sizeof (iov[0])));
+      } while ((-1 == rv) && (EPERM == errno));
       ssize_t i, len = 0;
       for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
 	len += iov[i].iov_len;
@@ -108,7 +111,7 @@ send_block (client_t * client, block_id_t * block_id)
 
       if (rv != len)
 	{
-	  ERROR_MSG ("Failed to send data block (sent %d bytes, but expexted %d bytes)", rv, len);
+	  ERROR_MSG ("Failed to send data block (sent %d bytes, but expexted %d bytes). Error (%d) '%s'", rv, len, errno, strerror (errno));
 	  status = ST_FAILURE;
 	}
     }
@@ -285,7 +288,6 @@ digest_calculator (void * arg)
 	      msg.msg_data.block_matched.duplicate_block_id = *matched_block_id;
 	    }
 	}
-
       
       DEBUG_MSG ("Push message:");
       DUMP_VAR (msg_t, &msg);
@@ -353,13 +355,13 @@ client_cmd_reader (client_t * client)
 static status_t
 start_data_writer (client_t * client)
 {
-  int i, ncpu = (long) sysconf (_SC_NPROCESSORS_ONLN);
-  pthread_t ids[ncpu];
+  int i, workers = (long)sysconf (_SC_NPROCESSORS_ONLN);
+  pthread_t ids[workers];
   status_t status = ST_FAILURE;
 
-  DEBUG_MSG ("Start server workers %d.", ncpu);
+  DEBUG_MSG ("Start server workers %d.", workers);
   
-  for (i = 0; i < ncpu; ++i)
+  for (i = 0; i < workers; ++i)
     {
       int rv = pthread_create (&ids[i], NULL, client_data_writer, client);
       if (rv != 0)
@@ -411,13 +413,13 @@ start_cmd_writer (client_t * client)
 static status_t
 start_digest_calculators (client_t * client)
 {
-  int i, ncpu = (long) sysconf (_SC_NPROCESSORS_ONLN);
-  pthread_t ids[ncpu];
+  int i, workers = (long) sysconf (_SC_NPROCESSORS_ONLN);
+  pthread_t ids[workers];
   status_t status = ST_FAILURE;
 
-  DEBUG_MSG ("Starting digest calculators %d.", ncpu);
+  DEBUG_MSG ("Starting digest calculators %d.", workers);
   
-  for (i = 0; i < ncpu; ++i)
+  for (i = 0; i < workers; ++i)
     {
       int rv = pthread_create (&ids[i], NULL, digest_calculator, client);
       if (rv != 0)

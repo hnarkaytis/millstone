@@ -24,17 +24,24 @@ mapped_region_init (mapped_region_t * mapped_region, int protect, int flags)
 }
 
 void
-mapped_region_free (mapped_region_t * mapped_region)
+mapped_region_unmap (mapped_region_t * mapped_region)
 {
-  pthread_mutex_lock (&mapped_region->mutex);
   if (mapped_region->data != NULL)
     {
+      /* wait until there will be no active users for existing mapping */
       while (mapped_region->ref_count != 0)
 	pthread_cond_wait (&mapped_region->cond, &mapped_region->mutex);
       if (0 != munmap (mapped_region->data, mapped_region->size))
 	ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
       mapped_region->data = NULL;
     }
+}
+
+void
+mapped_region_free (mapped_region_t * mapped_region)
+{
+  pthread_mutex_lock (&mapped_region->mutex);
+  mapped_region_unmap (mapped_region);
   pthread_mutex_unlock (&mapped_region->mutex);
   memset (mapped_region, 0, sizeof (*mapped_region));
 }
@@ -58,20 +65,14 @@ mapped_region_get_addr (context_t * context, block_id_t * block_id)
   if ((NULL == mapped_region->data) ||
       (block_id->offset < mapped_region->offset) ||
       (block_id->offset + block_id->size > mapped_region->offset + mapped_region->size))
-    {  
-      if (mapped_region->data != NULL)
-	{
-	  while (mapped_region->ref_count != 0)
-	    pthread_cond_wait (&mapped_region->cond, &mapped_region->mutex);
-	  if (0 != munmap (mapped_region->data, mapped_region->size))
-	    ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
-	}
-  
-      mapped_region->data = NULL;
+    {
+      mapped_region_unmap (mapped_region);
+      
       /* allign mapping region offset on a boundary of MAX_BLOCK_SIZE */
       mapped_region->offset = block_id->offset - (block_id->offset % MAX_BLOCK_SIZE);
-
+      /* set mapping size to maximum possible */
       mapped_region->size = MAX_BLOCK_SIZE;
+      /* extend mapping size if requested block exceeds expected maximum */
       if (mapped_region->size < block_id->size + (block_id->offset - mapped_region->offset))
 	mapped_region->size = block_id->size + (block_id->offset - mapped_region->offset);
       /* trim mapping size by file size */

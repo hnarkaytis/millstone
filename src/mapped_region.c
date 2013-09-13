@@ -18,18 +18,34 @@ mapped_region_init (mapped_region_t * mapped_region, int protect, int flags)
   memset (mapped_region, 0, sizeof (*mapped_region));
   mapped_region->protect = protect;
   mapped_region->flags = flags;
+  mapped_region->ref_count = 0;
   pthread_mutex_init (&mapped_region->mutex, NULL);
+  pthread_cond_init (&mapped_region->cond, NULL);
 }
 
 void
 mapped_region_free (mapped_region_t * mapped_region)
 {
+  pthread_mutex_lock (&mapped_region->mutex);
   if (mapped_region->data != NULL)
     {
+      while (mapped_region->ref_count != 0)
+	pthread_cond_wait (&mapped_region->cond, &mapped_region->mutex);
       if (0 != munmap (mapped_region->data, mapped_region->size))
 	ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
+      mapped_region->data = NULL;
     }
+  pthread_mutex_unlock (&mapped_region->mutex);
   memset (mapped_region, 0, sizeof (*mapped_region));
+}
+
+void
+mapped_region_unref (mapped_region_t * mapped_region)
+{
+  pthread_mutex_lock (&mapped_region->mutex);
+  if (--mapped_region->ref_count == 0)
+    pthread_cond_signal (&mapped_region->cond);
+  pthread_mutex_unlock (&mapped_region->mutex);
 }
 
 unsigned char *
@@ -45,6 +61,8 @@ mapped_region_get_addr (context_t * context, block_id_t * block_id)
     {  
       if (mapped_region->data != NULL)
 	{
+	  while (mapped_region->ref_count != 0)
+	    pthread_cond_wait (&mapped_region->cond, &mapped_region->mutex);
 	  if (0 != munmap (mapped_region->data, mapped_region->size))
 	    ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
 	}
@@ -71,7 +89,11 @@ mapped_region_get_addr (context_t * context, block_id_t * block_id)
     }
   
   if (NULL != mapped_region->data)
-    addr = &mapped_region->data[block_id->offset - mapped_region->offset];
+    {
+      addr = &mapped_region->data[block_id->offset - mapped_region->offset];
+      ++mapped_region->ref_count;
+    }
+
   pthread_mutex_unlock (&mapped_region->mutex);
   return (addr);
 }

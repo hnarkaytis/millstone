@@ -220,6 +220,7 @@ copy_duplicate (server_t * server, block_matched_t * block_matched)
       if (dst != NULL)
 	{
 	  memcpy (dst, src, block_matched->block_id.size);
+	  mapped_region_unref (&server->connection->context->mapped_region);
 	  status = ST_SUCCESS;
 	}
       if (0 != munmap (src, block_matched->duplicate_block_id.size))
@@ -360,6 +361,7 @@ server_worker (void * arg)
 	    break;
 	  
 	  SHA1 (data, msg.msg_data.block_digest.block_id.size, (unsigned char*)&msg.msg_data.block_digest.digest);
+	  mapped_region_unref (&server->connection->context->mapped_region);
 
 	  DEBUG_MSG ("Pushing to outgoing queue digest for offset %zd.", msg.msg_data.block_id.offset);
 	  
@@ -783,20 +785,22 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
       return (ST_FAILURE);
     }
 
-  off64_t map_offset = block_id->offset - (block_id->offset % PAGE_SIZE);
-  size_t map_size = block_id->size + (block_id->offset - map_offset);
-  unsigned char * dst = mmap64 (NULL, map_size, PROT_WRITE, MAP_SHARED, server->connection->context->file_fd, map_offset);
-  if (-1 == (long)dst)
+  if (block_id->offset < server->connection->context->mapped_region.offset)
     {
-      FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
+      DEBUG_MSG ("Duplicated block for previous memory mapping. Block offset %zd current mapping from %zd.",
+		 block_id->offset, server->connection->context->mapped_region.offset);
       return (ST_FAILURE);
     }
+  
+  unsigned char * dst = mapped_region_get_addr (server->connection->context, block_id);
+  if (NULL == dst)
+    return (ST_FAILURE);
   
 #ifdef HAVE_ZLIB
   if (*compress_level > 0)
     {
       uLong length = block_id->size;
-      int z_status = uncompress (&dst[block_id->offset - map_offset], &length, src, size);
+      int z_status = uncompress (dst, &length, src, size);
       if (Z_OK != z_status)
 	{
 	  ERROR_MSG ("Failed to uncompressed recieved block.");
@@ -822,11 +826,10 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
 	  ERROR_MSG ("Recieved block size mismatched target size (%d != %d).", size, block_id->size);
 	  status = ST_FAILURE;
 	}
-      memcpy (&dst[block_id->offset - map_offset], src, block_id->size);
+      memcpy (dst, src, block_id->size);
     }
-  
-  if (0 != munmap (dst, map_size))
-    ERROR_MSG ("Failed to unmap memory. Error (%d) %s.\n", errno, strerror (errno));
+
+  mapped_region_unref (&server->connection->context->mapped_region);
   
   /* unregister block in registry */
   sync_storage_del (&server->data_blocks, block_id);

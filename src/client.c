@@ -77,6 +77,8 @@ send_block (client_t * client, block_id_t * block_id)
     {
       int z_status = compress2 (buffer, &length, block_data, block_id->size,
 				client->connection->context->config->compress_level);
+      mapped_region_unref (&client->connection->context->mapped_region);
+      
       if (Z_OK != z_status)
 	status = ST_FAILURE;
     }
@@ -100,10 +102,17 @@ send_block (client_t * client, block_id_t * block_id)
 #endif /* HAVE_ZLIB */
 
       ssize_t rv;
-      do {
-	rv = TEMP_FAILURE_RETRY (writev (client->connection->data_fd, iov, sizeof (iov) / sizeof (iov[0])));
-      } while ((-1 == rv) && (EPERM == errno));
       ssize_t i, len = 0;
+      
+      do {
+	rv = writev (client->connection->data_fd, iov, sizeof (iov) / sizeof (iov[0]));
+      } while ((-1 == rv) && ((EPERM == errno) || (EINTR == errno)));
+
+#ifdef HAVE_ZLIB
+      if (client->connection->context->config->compress_level <= 0)
+	mapped_region_unref (&client->connection->context->mapped_region);
+#endif /* HAVE_ZLIB */
+      
       for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
 	len += iov[i].iov_len;
 
@@ -268,6 +277,7 @@ digest_calculator (void * arg)
 	break;
       
       SHA1 (block_data, block_digest.block_id.size, (unsigned char*)&block_digest.digest);
+      mapped_region_unref (&client->connection->context->mapped_region);
 
       msg.msg_type = MT_BLOCK_MATCHED;
       msg.msg_data.block_matched.matched = !memcmp (block_digest.digest, msg.msg_data.block_digest.digest, sizeof (block_digest.digest));

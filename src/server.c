@@ -26,7 +26,7 @@
 #include <zlib.h>
 #endif /* HAVE_ZLIB */
 
-#define DATA_READERS (4)
+#define MAX_TIP (1)
 
 TYPEDEF_STRUCT (task_t,
 		(block_id_t, block_id),
@@ -138,8 +138,17 @@ static void
 tip_dec (server_t * server)
 {
   pthread_mutex_lock (&server->tip_mutex);
-  if (--server->tip == 0)
+  if (--server->tip < MAX_TIP)
     pthread_cond_broadcast (&server->tip_cond);
+  pthread_mutex_unlock (&server->tip_mutex);
+}
+
+static void
+wait_tip_low (server_t * server)
+{
+  pthread_mutex_lock (&server->tip_mutex);
+  while (server->tip >= MAX_TIP)
+    pthread_cond_wait (&server->tip_cond, &server->tip_mutex);
   pthread_mutex_unlock (&server->tip_mutex);
 }
 
@@ -473,10 +482,7 @@ data_retrieval (void * arg)
       if (ST_SUCCESS != status)
 	break;
 
-      pthread_mutex_lock (&server->tip_mutex);
-      while (server->tip != 0)
-	pthread_cond_wait (&server->tip_cond, &server->tip_mutex);
-      pthread_mutex_unlock (&server->tip_mutex);
+      wait_tip_low (server);
     }
 
   if (ST_SUCCESS == status)
@@ -536,11 +542,8 @@ task_producer (void * arg)
       status = task_push (server, &task);
       if (ST_SUCCESS != status)
 	break;
-      
-      pthread_mutex_lock (&server->tip_mutex);
-      while (server->tip != 0)
-	pthread_cond_wait (&server->tip_cond, &server->tip_mutex);
-      pthread_mutex_unlock (&server->tip_mutex);
+
+      wait_tip_low (server);
     }
 
   if (ST_SUCCESS == status)

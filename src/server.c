@@ -8,7 +8,7 @@
 #include <queue.h>
 #include <msg.h>
 #include <sync_storage.h>
-#include <task_queue.h>
+#include <llist.h>
 #include <mapped_region.h>
 #include <mtu_tune.h>
 #include <server.h>
@@ -28,6 +28,11 @@
 
 #define DATA_READERS (4)
 
+TYPEDEF_STRUCT (task_t,
+		(block_id_t, block_id),
+		(size_t, size),
+		)
+
 TYPEDEF_STRUCT (server_ctx_t,
 		(config_t *, config),
 		int server_sock,
@@ -39,7 +44,7 @@ TYPEDEF_STRUCT (server_ctx_t,
 TYPEDEF_STRUCT (server_t,
 		(connection_t *, connection),
 		(msg_queue_t, cmd_out),
-		(task_queue_t, task_queue),
+		(llist_t, task_queue),
 		(sync_storage_t, data_blocks),
 		(mtu_tune_t, mtu_tune),
 		(server_ctx_t *, server_ctx),
@@ -142,7 +147,7 @@ static status_t
 task_push (server_t * server, task_t * task)
 {
   tip_inc (server);
-  status_t status = task_queue_push (&server->task_queue, task);
+  status_t status = llist_push (&server->task_queue, task);
   if (ST_SUCCESS != status)
     tip_dec (server);
   return (status);
@@ -339,7 +344,7 @@ server_worker (void * arg)
   memset (&msg, 0, sizeof (msg));
   for (;;)
     {
-      status_t status = task_queue_pop (&server->task_queue, &task);
+      status_t status = llist_pop (&server->task_queue, &task);
       if (ST_SUCCESS != status)
 	break;
       
@@ -435,7 +440,7 @@ start_workers (server_t * server)
 
   DEBUG_MSG ("Canceling server workers.");
   
-  task_queue_cancel (&server->task_queue);
+  llist_cancel (&server->task_queue);
   queue_cancel (&server->cmd_out.queue);
   for (--i ; i >= 0; --i)
     pthread_join (ids[i], NULL);
@@ -561,7 +566,7 @@ start_task_producer (server_t * server)
 
   DEBUG_MSG ("Canceling tasks producer thread.");
   
-  task_queue_cancel (&server->task_queue);
+  llist_cancel (&server->task_queue);
   pthread_join (id, NULL);
   
   DEBUG_MSG ("Tasks producer thread canceled.");
@@ -593,7 +598,7 @@ start_cmd_reader (server_t * server)
   DEBUG_MSG ("Canceling command reader thread.");
   
   queue_cancel (&server->cmd_out.queue);
-  task_queue_cancel (&server->task_queue);
+  llist_cancel (&server->task_queue);
   pthread_join (id, NULL);
   
   DEBUG_MSG ("Command reader thread canceled.");
@@ -634,7 +639,7 @@ handle_client (void * arg)
   msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
   MSG_QUEUE_INIT (&server.cmd_out, cmd_out_array_data);
 
-  task_queue_init (&server.task_queue);
+  LLIST_INIT (&server.task_queue, task_t);
 
   DEBUG_MSG ("Context for new client inited. Read file meta from client.");
   
@@ -657,7 +662,7 @@ handle_client (void * arg)
   shutdown (accepter_ctx.fd, SD_BOTH);
   close (accepter_ctx.fd);
 
-  task_queue_cancel (&server.task_queue); /* free allocated slots */
+  llist_cancel (&server.task_queue); /* free allocated slots */
   
   sync_storage_free (&server.data_blocks);
 

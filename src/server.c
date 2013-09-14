@@ -84,7 +84,7 @@ block_id_free (const mr_ptr_t x, const void * null)
 status_t
 block_id_register (sync_storage_t * sync_storage, block_id_t * block_id)
 {
-  block_id_t * alloc_block_id = MR_MALLOC (sizeof (*block_id));
+  block_id_t * alloc_block_id = MR_MALLOC (sizeof (*alloc_block_id));
   if (NULL == alloc_block_id)
     {
       FATAL_MSG ("Out of memory.");
@@ -776,7 +776,10 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
   typeof (server->connection->context->config->compress_level) * compress_level = (void*)&buf[sizeof (*block_id)];
   int size = buf_size - sizeof (*block_id) - sizeof (*compress_level);
   unsigned char * src = &buf[sizeof (*block_id) + sizeof (*compress_level)];
-
+  mr_ptr_t * find = sync_storage_find (&server->data_blocks, block_id);
+  if (find == NULL) /* got second duplicate */
+    return (ST_SUCCESS);
+  
   DEBUG_MSG ("Write block at offset 0x%zx size %zd.", block_id->offset, block_id->size);
 
   if (size < 0)
@@ -791,6 +794,9 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
 		 block_id->offset, server->connection->context->mapped_region.offset);
       return (ST_FAILURE);
     }
+  
+  /* unregister block in registry */
+  sync_storage_del (&server->data_blocks, block_id);
   
   unsigned char * dst = mapped_region_get_addr (server->connection->context, block_id);
   if (NULL == dst)
@@ -830,9 +836,6 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
     }
 
   mapped_region_unref (&server->connection->context->mapped_region);
-  
-  /* unregister block in registry */
-  sync_storage_del (&server->data_blocks, block_id);
   
   DEBUG_MSG ("Write block done.");
   

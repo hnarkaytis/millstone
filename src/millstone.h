@@ -26,7 +26,7 @@
 
 #define EXPECTED_PACKET_SIZE (1500 - 72) /* IPv6, TCP timestamps - 72 bytes */
 
-#define MAX_TIP (8)
+#define MAX_TIP (16)
 
 #ifndef SD_BOTH
 #define SD_BOTH (2)

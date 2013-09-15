@@ -332,6 +332,7 @@ server_cmd_reader (void * arg)
 	break;
     }
 
+  llist_cancel (&server->cmd_out);
   DEBUG_MSG ("Exiting server command reader thread.");
   
   return (NULL);
@@ -395,26 +396,23 @@ static status_t
 server_cmd_writer (server_t * server)
 {
   status_t status = ST_SUCCESS;
-  msg_t msg;
-
+  char buf[EXPECTED_PACKET_SIZE];
+  
   DEBUG_MSG ("Started server command writer.");
   
-  memset (&msg, 0, sizeof (msg));
+  memset (buf, 0, sizeof (buf));
   for (;;)
     {
-      status = llist_pop (&server->cmd_out, &msg);
+      size_t buf_size = sizeof (buf);
+      status = llist_pop_bulk (&server->cmd_out, buf, &buf_size);
       if (ST_SUCCESS != status)
 	break;
       
-      DEBUG_MSG ("Write message type %d to client %08x:%04x.", msg.msg_type,
+      DEBUG_MSG ("Write %d bytes to client %08x:%04x.", buf_size,
 		 server->connection->remote.sin_addr.s_addr, server->connection->remote.sin_port);
-      DUMP_VAR (msg_t, &msg);
 
-      status = msg_send (server->connection->cmd_fd, &msg);
+      status = msg_send (server->connection->cmd_fd, buf, buf_size);
       if (status != ST_SUCCESS)
-	break;
-      
-      if (MT_TERMINATE == msg.msg_type)
 	break;
     }
   
@@ -669,7 +667,7 @@ handle_client (void * arg)
   sync_storage_free (&server.data_blocks);
 
   DEBUG_MSG ("Closed connection to client: %08x:%04x.", accepter_ctx.remote.sin_addr.s_addr, accepter_ctx.remote.sin_port);
-  
+
   return (NULL);
 }
 
@@ -717,7 +715,7 @@ run_accepter (server_ctx_t * server_ctx)
       if (accepter_ctx.fd < 0)
 	{
 	  ERROR_MSG ("accept failed errno(%d) '%s'.", errno, strerror (errno));
-	  if (EBADF == errno)
+	  if ((EBADF == errno) || (EINVAL == errno))
 	    break;
 	  else
 	    continue;

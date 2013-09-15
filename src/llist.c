@@ -54,9 +54,10 @@ llist_push (llist_t * llist, void * elem)
 }
 
 status_t
-llist_pop (llist_t * llist, void * elem)
+llist_pop_bulk (llist_t * llist, void * buf, size_t * buf_size)
 {
-  llist_slot_t * llist_slot = &llist->queue;
+  char * char_buf = buf;
+  llist_slot_t * first_slot = NULL;
   status_t status = ST_FAILURE;
   
   pthread_mutex_lock (&llist->mutex);
@@ -65,21 +66,39 @@ llist_pop (llist_t * llist, void * elem)
 
   if (!llist->cancel)
     {
-      llist_slot = llist->queue.prev;
-      llist_slot->prev->next = &llist->queue;
-      llist->queue.prev = llist_slot->prev;
-      --llist->count;
+      llist_slot_t * last_slot = first_slot = llist->queue.prev;
+      size_t count;
+
+      for (count = *buf_size / llist->elem_size; (count > 0) && (llist->count > 0); --count)
+	{
+	  last_slot = last_slot->prev;
+	  --llist->count;
+	}
+      last_slot->next->prev = NULL;
+      last_slot->next = &llist->queue;
+      llist->queue.prev = last_slot;
       status = ST_SUCCESS;
     }
   pthread_mutex_unlock (&llist->mutex);
 
-  if (llist_slot != &llist->queue)
+  *buf_size = 0;
+  while (first_slot != NULL)
     {
-      memcpy (elem, llist_slot->elem, llist->elem_size);
-      MR_FREE (llist_slot);
+      void * slot = first_slot;
+      memcpy (&char_buf[*buf_size], first_slot->elem, llist->elem_size);
+      *buf_size += llist->elem_size;
+      first_slot = first_slot->prev;
+      MR_FREE (slot);
     }
   
   return (status);
+}
+
+status_t
+llist_pop (llist_t * llist, void * elem)
+{
+  size_t buf_size = llist->elem_size;
+  return (llist_pop_bulk (llist, elem, &buf_size));
 }
 
 void

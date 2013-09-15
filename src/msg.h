@@ -28,7 +28,7 @@ TYPEDEF_STRUCT (msg_t, ATTRIBUTES (__attribute__ ((packed))),
 		(msg_type_t, msg_type),
 		)
 
-extern status_t msg_send (int fd, msg_t * msg);
 extern status_t msg_recv (int fd, msg_t * msg);
+extern status_t msg_send (int fd, char * msg_buf, size_t size);
 
 #endif /* _MSG_H_ */

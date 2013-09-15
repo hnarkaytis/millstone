@@ -167,23 +167,25 @@ static void *
 client_cmd_writer (void * arg)
 {
   client_t * client = arg;
+  char buf[EXPECTED_PACKET_SIZE];
   
   DEBUG_MSG ("Enter client command writer.");
   
+  memset (buf, 0, sizeof (buf));
   for (;;)
     {
-      msg_t msg;
-      status_t status = llist_pop (&client->cmd_out, &msg);
+      size_t buf_size = sizeof (buf);
+      status_t status = llist_pop_bulk (&client->cmd_out, buf, &buf_size);
       if (ST_SUCCESS != status)
 	break;
-      
-      DUMP_VAR (msg_t, &msg);
-      status = msg_send (client->connection->cmd_fd, &msg);
+
+      DEBUG_MSG ("Send %d bytes to server.", buf_size);
+
+      status = msg_send (client->connection->cmd_fd, buf, buf_size);
       if (ST_SUCCESS != status)
 	break;
-      
+
       DEBUG_MSG ("Message sent.");
-      
     }
   
   shutdown (client->connection->cmd_fd, SD_BOTH);

@@ -30,6 +30,8 @@ TYPEDEF_STRUCT (llist_t,
 extern void llist_init (llist_t * llist, size_t elem_size, char * elem_type);
 extern status_t llist_push (llist_t * llist, void * elem);
 extern status_t llist_pop (llist_t * llist, void * elem);
+extern status_t llist_pop_bulk (llist_t * llist, void * buf, size_t * buf_size);
+
 extern void llist_cancel (llist_t * llist);
 
 #define LLIST_INIT(LLIST, ELEM_TYPE) llist_init (LLIST, sizeof (ELEM_TYPE), #ELEM_TYPE)

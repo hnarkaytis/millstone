@@ -35,12 +35,9 @@ mtu_tune_get_width (int value)
 int
 bit_count_ (uint64_t value)
 {
-  int count = 0;
-  while (value != 0)
-    {
-      ++count;
-      value &= value - 1;
-    }
+  int count;
+  for (count = 0; value != 0; ++count)
+    value &= value - 1;
   return (count);
 }
 
@@ -49,19 +46,18 @@ bit_count (uint64_t value)
 {
   static bool inited = FALSE;
   static int byte_bits[1 << CHAR_BIT];
-  int i, count = 0;
+  int i, count;
 
   if (!inited)
     {
       for (i = 0; i < sizeof (byte_bits) / sizeof (byte_bits[0]); ++i)
 	byte_bits[i] = bit_count_ (i);
+      inited = TRUE;
     }
 
-  while (value != 0)
-    {
-      count += byte_bits[value & (sizeof (byte_bits) / sizeof (byte_bits[0]) - 1)];
-      value >>= CHAR_BIT;
-    }
+  for (count = 0; value != 0; value >>= CHAR_BIT)
+    count += byte_bits[value & ((1 << CHAR_BIT) - 1)];
+  
   return (count);
 }
 

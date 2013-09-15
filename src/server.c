@@ -796,13 +796,8 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
   /* unregister block in registry */
   sync_storage_del (&server->data_blocks, block_id);
 
-  /* try to get temporary lock if mapping for block exists */
-  if (ST_SUCCESS != mmap_mng_lock (&server->connection->context->mmap_mng, block_id))
-    return (ST_FAILURE);
-
   /* get address for block and release temporary lock */
   unsigned char * dst = mmap_mng_get_addr (server->connection->context, block_id);
-  mmap_mng_unref (&server->connection->context->mmap_mng, block_id);
 
   if (NULL == dst)
     return (ST_FAILURE);

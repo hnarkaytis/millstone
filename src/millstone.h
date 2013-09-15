@@ -26,7 +26,7 @@
 
 #define EXPECTED_PACKET_SIZE (1500 - 72) /* IPv6, TCP timestamps - 72 bytes */
 
-#define MAX_TIP (16)
+#define MAX_TIP (8)
 
 #ifndef SD_BOTH
 #define SD_BOTH (2)
@@ -57,7 +57,7 @@ TYPEDEF_STRUCT (mapped_region_t,
 		)		
 
 TYPEDEF_STRUCT (mmap_mng_t,
-		(mapped_region_t, mapped_region, [MAX_TIP]),
+		(mapped_region_t, mapped_region, [MAX_TIP << 1]),
 		int protect,
 		int flags,
 		)

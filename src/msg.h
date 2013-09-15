@@ -6,23 +6,10 @@
 #endif /* HAVE_CONFIG_H */
 #include <millstone.h> /* status_t */
 #include <block.h> /* block_*_t */
-#include <queue.h> /* queue_t */
 
 #include <metaresc.h>
 
-#define MSG_OUT_QUEUE_SIZE (1 << 1)
-#define MSG_IN_QUEUE_SIZE (MAX_BLOCK_SIZE / MIN_BLOCK_SIZE)
-
-#define MSG_QUEUE_INIT(MSG_QUEUE, ARRAY) msg_queue_init (MSG_QUEUE, ARRAY, sizeof (ARRAY))
-
-TYPEDEF_UNION (msg_data_t,
-	       NONE (char, empty),
-	       (block_id_t, block_id),
-	       (block_matched_t, block_matched),
-	       (block_digest_t, block_digest),
-	       )
-
-TYPEDEF_ENUM (msg_type_t,
+TYPEDEF_ENUM (msg_type_t, ATTRIBUTES (__attribute__ ((packed))),
 	      MT_TERMINATE,
 	      (MT_BLOCK_REQUEST, , "block_id"),
 	      (MT_BLOCK_SENT, , "block_id"),
@@ -31,17 +18,16 @@ TYPEDEF_ENUM (msg_type_t,
 	      (MT_BLOCK_DIGEST, , "block_digest"),
 	      )
 
-TYPEDEF_STRUCT (msg_t,
+TYPEDEF_STRUCT (msg_t, ATTRIBUTES (__attribute__ ((packed))),
+		ANON_UNION (msg_data, __attribute__ ((packed))),
+		NONE (char, empty),
+		(block_id_t, block_id),
+		(block_matched_t, block_matched),
+		(block_digest_t, block_digest),
+		END_ANON_UNION ("msg_type"),
 		(msg_type_t, msg_type),
-		(msg_data_t, msg_data, , "msg_type"),
 		)
 
-TYPEDEF_STRUCT (msg_queue_t,
-		(queue_t, queue),
-		RARRAY (msg_t, array),
-		)
-
-extern void msg_queue_init (msg_queue_t * msg_queue, msg_t * array, size_t size);
 extern status_t msg_send (int fd, msg_t * msg);
 extern status_t msg_recv (int fd, msg_t * msg);
 

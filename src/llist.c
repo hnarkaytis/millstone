@@ -1,5 +1,5 @@
 #include <millstone.h> /* status_t */
-#include <block.h> /* block_id_t */
+#include <logging.h>
 #include <llist.h>
 
 #include <stddef.h> /* size_t, ssize_t */
@@ -71,12 +71,11 @@ llist_pop (llist_t * llist, void * elem)
       --llist->count;
       status = ST_SUCCESS;
     }
-
   pthread_mutex_unlock (&llist->mutex);
 
   if (llist_slot != &llist->queue)
     {
-      memcpy (elem, llist_slot, llist->elem_size);
+      memcpy (elem, llist_slot->elem, llist->elem_size);
       MR_FREE (llist_slot);
     }
   
@@ -91,6 +90,9 @@ llist_cancel (llist_t * llist)
       llist->cancel = TRUE;
       pthread_cond_broadcast (&llist->empty);
       pthread_mutex_lock (&llist->mutex);
+
+      DUMP_VAR (llist_t, llist);
+      
       while (llist->queue.prev != &llist->queue)
 	{
 	  llist_slot_t * llist_slot = llist->queue.prev;

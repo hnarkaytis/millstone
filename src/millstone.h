@@ -24,6 +24,8 @@
 #define MIN_BLOCK_SIZE (PAGE_SIZE)
 #define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO * SPLIT_RATIO)
 
+#define EXPECTED_PACKET_SIZE (1500 - 72) /* IPv6, TCP timestamps - 72 bytes */
+
 #ifndef SD_BOTH
 #define SD_BOTH (2)
 #endif /* SD_BOTH */

@@ -5,7 +5,6 @@
 #include <logging.h>
 #include <block.h>
 #include <file_meta.h>
-#include <queue.h>
 #include <msg.h>
 #include <sync_storage.h>
 #include <llist.h>
@@ -43,7 +42,7 @@ TYPEDEF_STRUCT (server_ctx_t,
 
 TYPEDEF_STRUCT (server_t,
 		(connection_t *, connection),
-		(msg_queue_t, cmd_out),
+		(llist_t, cmd_out),
 		(llist_t, task_queue),
 		(sync_storage_t, data_blocks),
 		(mtu_tune_t, mtu_tune),
@@ -166,7 +165,7 @@ static status_t
 msg_push (server_t * server, msg_t * msg)
 {
   tip_inc (server);
-  status_t status = queue_push (&server->cmd_out.queue, msg);
+  status_t status = llist_push (&server->cmd_out, msg);
   if (ST_SUCCESS != status)
     tip_dec (server);
   return (status);
@@ -191,15 +190,15 @@ send_block_request (server_t * server, block_id_t * block_id)
   
   DUMP_VAR (msg_t, &msg);
   
-  for (msg.msg_data.block_id.offset = block_id->offset;
-       msg.msg_data.block_id.offset < block_id->offset + block_id->size;
-       msg.msg_data.block_id.offset += msg.msg_data.block_id.size)
+  for (msg.block_id.offset = block_id->offset;
+       msg.block_id.offset < block_id->offset + block_id->size;
+       msg.block_id.offset += msg.block_id.size)
     {
-      msg.msg_data.block_id.size = block_id->size - (msg.msg_data.block_id.offset - block_id->offset);
+      msg.block_id.size = block_id->size - (msg.block_id.offset - block_id->offset);
 
-      mtu_tune_set_size (&server->mtu_tune, &msg.msg_data.block_id);
+      mtu_tune_set_size (&server->mtu_tune, &msg.block_id);
       
-      status = block_id_register (&server->data_blocks, &msg.msg_data.block_id);
+      status = block_id_register (&server->data_blocks, &msg.block_id);
       if (ST_SUCCESS != status)
 	break;
       
@@ -317,13 +316,13 @@ server_cmd_reader (void * arg)
       switch (msg.msg_type)
 	{
 	case MT_BLOCK_MATCHED:
-	  status = block_matched (server, &msg.msg_data.block_matched);
+	  status = block_matched (server, &msg.block_matched);
 	  break;
 	case MT_BLOCK_SEND_ERROR:
 	  ERROR_MSG ("Client failed to send data block (offset %zd size %zd).",
-		     msg.msg_data.block_id.offset, msg.msg_data.block_id.size);
+		     msg.block_id.offset, msg.block_id.size);
 	case MT_BLOCK_SENT:
-	  status = block_sent (server, &msg.msg_data.block_id);
+	  status = block_sent (server, &msg.block_id);
 	  break;
 	default:
 	  status = ST_FAILURE;
@@ -361,29 +360,29 @@ server_worker (void * arg)
 		 task.block_id.offset, task.block_id.size, task.size);
       
       msg.msg_type = MT_BLOCK_DIGEST;
-      msg.msg_data.block_id.size = task.size;
-      for (offset = 0; offset < task.block_id.size; offset += msg.msg_data.block_id.size)
+      msg.block_id.size = task.size;
+      for (offset = 0; offset < task.block_id.size; offset += msg.block_id.size)
 	{
-	  msg.msg_data.block_id.offset = task.block_id.offset + offset;
-	  if (msg.msg_data.block_id.size > task.block_id.size - offset)
-	    msg.msg_data.block_id.size = task.block_id.size - offset;
+	  msg.block_id.offset = task.block_id.offset + offset;
+	  if (msg.block_id.size > task.block_id.size - offset)
+	    msg.block_id.size = task.block_id.size - offset;
 
-	  DEBUG_MSG ("Calc digest for offset %zd status %d.", msg.msg_data.block_id.offset, status);
+	  DEBUG_MSG ("Calc digest for offset %zd status %d.", msg.block_id.offset, status);
 	  
-	  unsigned char * data = mapped_region_get_addr (server->connection->context, &msg.msg_data.block_digest.block_id);
+	  unsigned char * data = mapped_region_get_addr (server->connection->context, &msg.block_digest.block_id);
 	  if (NULL == data)
 	    break;
 	  
-	  SHA1 (data, msg.msg_data.block_digest.block_id.size, (unsigned char*)&msg.msg_data.block_digest.digest);
+	  SHA1 (data, msg.block_digest.block_id.size, (unsigned char*)&msg.block_digest.digest);
 	  mapped_region_unref (&server->connection->context->mapped_region);
 
-	  DEBUG_MSG ("Pushing to outgoing queue digest for offset %zd.", msg.msg_data.block_id.offset);
+	  DEBUG_MSG ("Pushing to outgoing queue digest for offset %zd.", msg.block_id.offset);
 	  
 	  status = msg_push (server, &msg);
 	  if (ST_SUCCESS != status)
 	    break;
 	  
-	  DEBUG_MSG ("Pushed digest for offset %zd.", msg.msg_data.block_id.offset);
+	  DEBUG_MSG ("Pushed digest for offset %zd.", msg.block_id.offset);
 	}
       
       tip_dec (server);
@@ -405,7 +404,7 @@ server_cmd_writer (server_t * server)
   memset (&msg, 0, sizeof (msg));
   for (;;)
     {
-      status = queue_pop (&server->cmd_out.queue, &msg);
+      status = llist_pop (&server->cmd_out, &msg);
       if (ST_SUCCESS != status)
 	break;
       
@@ -450,7 +449,7 @@ start_workers (server_t * server)
   DEBUG_MSG ("Canceling server workers.");
   
   llist_cancel (&server->task_queue);
-  queue_cancel (&server->cmd_out.queue);
+  llist_cancel (&server->cmd_out);
   for (--i ; i >= 0; --i)
     pthread_join (ids[i], NULL);
   
@@ -511,7 +510,7 @@ start_data_retrieval (server_t * server)
 
   DEBUG_MSG ("Canceling data retrieval thread.");
 
-  queue_cancel (&server->cmd_out.queue);
+  llist_cancel (&server->cmd_out);
   pthread_join (id, NULL);
   
   DEBUG_MSG ("Data retrieval thread canceled.");
@@ -600,7 +599,7 @@ start_cmd_reader (server_t * server)
 
   DEBUG_MSG ("Canceling command reader thread.");
   
-  queue_cancel (&server->cmd_out.queue);
+  llist_cancel (&server->cmd_out);
   llist_cancel (&server->task_queue);
   pthread_join (id, NULL);
   
@@ -639,9 +638,7 @@ handle_client (void * arg)
   sync_storage_init (&server.data_blocks, block_id_compar, block_id_hash, block_id_free, "block_id_t", NULL);
   mtu_tune_init (&server.mtu_tune);
   
-  msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
-  MSG_QUEUE_INIT (&server.cmd_out, cmd_out_array_data);
-
+  LLIST_INIT (&server.cmd_out, msg_t);
   LLIST_INIT (&server.task_queue, task_t);
 
   DEBUG_MSG ("Context for new client inited. Read file meta from client.");
@@ -665,7 +662,9 @@ handle_client (void * arg)
   shutdown (accepter_ctx.fd, SD_BOTH);
   close (accepter_ctx.fd);
 
-  llist_cancel (&server.task_queue); /* free allocated slots */
+  /* free allocated slots */
+  llist_cancel (&server.task_queue);
+  llist_cancel (&server.cmd_out);
   
   sync_storage_free (&server.data_blocks);
 

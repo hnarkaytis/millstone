@@ -121,7 +121,7 @@ parse_args (int argc, char * argv[], config_t * config)
 int main (int argc, char * argv[])
 {
   config_t config;
-  
+
   DEBUG_MSG ("Start Millstone. Parse params.");
   
   status_t status = parse_args (argc, argv, &config);

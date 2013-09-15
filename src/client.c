@@ -5,6 +5,7 @@
 #include <logging.h>
 #include <block.h>
 #include <msg.h>
+#include <llist.h>
 #include <file_meta.h>
 #include <mapped_region.h>
 #include <client.h>
@@ -38,9 +39,9 @@ TYPEDEF_STRUCT (dedup_t,
 
 TYPEDEF_STRUCT (client_t,
 		(connection_t *, connection),
-		(msg_queue_t, data_in),
-		(msg_queue_t, cmd_in),
-		(msg_queue_t, cmd_out),
+		(llist_t, data_in),
+		(llist_t, cmd_in),
+		(llist_t, cmd_out),
 		(dedup_t, dedup),
 		)
 
@@ -138,12 +139,12 @@ client_data_writer (void * arg)
   for (;;)
     {
       msg_t msg;
-      status_t status = queue_pop (&client->data_in.queue, &msg);
+      status_t status = llist_pop (&client->data_in, &msg);
       if (ST_SUCCESS != status)
 	break;
       
       DUMP_VAR (msg_t, &msg);
-      status = send_block (client, &msg.msg_data.block_id);
+      status = send_block (client, &msg.block_id);
       
       DEBUG_MSG ("Data block send status %d.", status);
 
@@ -152,7 +153,7 @@ client_data_writer (void * arg)
       else
 	msg.msg_type = MT_BLOCK_SENT;
       
-      status = queue_push (&client->cmd_out.queue, &msg);
+      status = llist_push (&client->cmd_out, &msg);
       if (ST_SUCCESS != status)
 	break;
     }
@@ -172,7 +173,7 @@ client_cmd_writer (void * arg)
   for (;;)
     {
       msg_t msg;
-      status_t status = queue_pop (&client->cmd_out.queue, &msg);
+      status_t status = llist_pop (&client->cmd_out, &msg);
       if (ST_SUCCESS != status)
 	break;
       
@@ -262,16 +263,17 @@ digest_calculator (void * arg)
   DEBUG_MSG ("Entered digest calculator.");
 
   memset (&block_digest, 0, sizeof (block_digest));
+  memset (&msg, 0, sizeof (msg));
   
   for (;;)
     {
-      status_t status = queue_pop (&client->cmd_in.queue, &msg);
+      status_t status = llist_pop (&client->cmd_in, &msg);
       if (ST_SUCCESS != status)
 	break;
       
       DUMP_VAR (msg_t, &msg);
       
-      block_digest.block_id = msg.msg_data.block_digest.block_id;
+      block_digest.block_id = msg.block_digest.block_id;
       unsigned char * block_data = mapped_region_get_addr (client->connection->context, &block_digest.block_id);
       if (NULL == block_data)
 	break;
@@ -280,29 +282,29 @@ digest_calculator (void * arg)
       mapped_region_unref (&client->connection->context->mapped_region);
 
       msg.msg_type = MT_BLOCK_MATCHED;
-      msg.msg_data.block_matched.matched = !memcmp (block_digest.digest, msg.msg_data.block_digest.digest, sizeof (block_digest.digest));
-      msg.msg_data.block_matched.duplicate = FALSE;
-      memset (&msg.msg_data.block_matched.duplicate_block_id, 0, sizeof (msg.msg_data.block_matched.duplicate_block_id));
+      msg.block_matched.matched = !memcmp (block_digest.digest, msg.block_digest.digest, sizeof (block_digest.digest));
+      msg.block_matched.duplicate = FALSE;
+      memset (&msg.block_matched.duplicate_block_id, 0, sizeof (msg.block_matched.duplicate_block_id));
 
       DEBUG_MSG ("Block on offset %zd matched status %d.",
-		 msg.msg_data.block_digest.block_id.offset, msg.msg_data.block_matched.matched);
+		 msg.block_digest.block_id.offset, msg.block_matched.matched);
 
-      if (msg.msg_data.block_matched.matched)
+      if (msg.block_matched.matched)
 	dedup_add (&client->dedup, &block_digest);
       else
 	{
 	  block_id_t * matched_block_id = dedup_check (&client->dedup, &block_digest);
 	  if (matched_block_id != NULL)
 	    {
-	      msg.msg_data.block_matched.duplicate = TRUE;
-	      msg.msg_data.block_matched.duplicate_block_id = *matched_block_id;
+	      msg.block_matched.duplicate = TRUE;
+	      msg.block_matched.duplicate_block_id = *matched_block_id;
 	    }
 	}
       
       DEBUG_MSG ("Push message:");
       DUMP_VAR (msg_t, &msg);
       
-      status = queue_push (&client->cmd_out.queue, &msg);
+      status = llist_push (&client->cmd_out, &msg);
       if (ST_SUCCESS != status)
 	break;
       
@@ -343,10 +345,10 @@ client_cmd_reader (client_t * client)
       switch (msg.msg_type)
 	{
 	case MT_BLOCK_DIGEST:
-	  status = queue_push (&client->cmd_in.queue, &msg);
+	  status = llist_push (&client->cmd_in, &msg);
 	  break;
 	case MT_BLOCK_REQUEST:
-	  status = queue_push (&client->data_in.queue, &msg);
+	  status = llist_push (&client->data_in, &msg);
 	  break;
 	default:
 	  ERROR_MSG ("Unexpected message type %d.", msg.msg_type);
@@ -385,8 +387,8 @@ start_data_writer (client_t * client)
 
   DEBUG_MSG ("Canceling data writer.");
   
-  queue_cancel (&client->data_in.queue);
-  queue_cancel (&client->cmd_out.queue);
+  llist_cancel (&client->data_in);
+  llist_cancel (&client->cmd_out);
   for (--i ; i >= 0; --i)
     pthread_join (ids[i], NULL);
   
@@ -412,7 +414,7 @@ start_cmd_writer (client_t * client)
   
   DEBUG_MSG ("Canceling command writer.");
   
-  queue_cancel (&client->cmd_out.queue);
+  llist_cancel (&client->cmd_out);
   pthread_join (id, NULL);
   
   DEBUG_MSG ("Command writer canceled.");
@@ -443,8 +445,8 @@ start_digest_calculators (client_t * client)
 
   DEBUG_MSG ("Canceling digest calculators.");
   
-  queue_cancel (&client->cmd_in.queue);
-  queue_cancel (&client->cmd_out.queue);
+  llist_cancel (&client->cmd_in);
+  llist_cancel (&client->cmd_out);
   for (--i ; i >= 0; --i)
     pthread_join (ids[i], NULL);
   
@@ -457,9 +459,6 @@ static status_t
 run_session (connection_t * connection)
 {
   client_t client;
-  msg_t cmd_out_array_data[MSG_OUT_QUEUE_SIZE];
-  msg_t cmd_in_array_data[MSG_IN_QUEUE_SIZE];
-  msg_t data_in_array_data[MSG_IN_QUEUE_SIZE];
 
   memset (&client, 0, sizeof (client));
   client.connection = connection;
@@ -470,9 +469,9 @@ run_session (connection_t * connection)
   if (ST_SUCCESS != status)
     return (status);
   
-  MSG_QUEUE_INIT (&client.cmd_out, cmd_out_array_data);
-  MSG_QUEUE_INIT (&client.cmd_in, cmd_in_array_data);
-  MSG_QUEUE_INIT (&client.data_in, data_in_array_data);
+  LLIST_INIT (&client.cmd_out, msg_t);
+  LLIST_INIT (&client.cmd_in, msg_t);
+  LLIST_INIT (&client.data_in, msg_t);
 
   status = dedup_init (&client.dedup, connection->context->config->mem_threshold);
   if (ST_SUCCESS != status)
@@ -483,6 +482,10 @@ run_session (connection_t * connection)
   status = start_digest_calculators (&client);
 
   dedup_free (&client.dedup);
+
+  llist_cancel (&client.data_in);
+  llist_cancel (&client.cmd_in);
+  llist_cancel (&client.cmd_out);
   
   DEBUG_MSG ("Session done.");
 

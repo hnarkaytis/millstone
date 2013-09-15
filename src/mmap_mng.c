@@ -4,7 +4,7 @@
 #include <millstone.h>
 #include <logging.h>
 #include <block.h>
-#include <mapped_region.h>
+#include <mmap_mng.h>
 
 #include <sys/mman.h> /* mmap64, unmap */
 #include <errno.h> /* errno */
@@ -12,12 +12,12 @@
 
 #include <pthread.h>
 
+#define MR_COUNT (sizeof (((mmap_mng_t*)NULL)->mapped_region) / sizeof (((mmap_mng_t*)NULL)->mapped_region[0]))
+
 void
-mapped_region_init (mapped_region_t * mapped_region, int protect, int flags)
+mapped_region_init (mapped_region_t * mapped_region)
 {
   memset (mapped_region, 0, sizeof (*mapped_region));
-  mapped_region->protect = protect;
-  mapped_region->flags = flags;
   mapped_region->ref_count = 0;
   pthread_mutex_init (&mapped_region->mutex, NULL);
   pthread_cond_init (&mapped_region->cond, NULL);
@@ -55,16 +55,73 @@ mapped_region_unref (mapped_region_t * mapped_region)
   pthread_mutex_unlock (&mapped_region->mutex);
 }
 
-unsigned char *
-mapped_region_get_addr (context_t * context, block_id_t * block_id)
+bool
+mapped_region_misses_block (mapped_region_t * mapped_region, block_id_t * block_id)
 {
-  mapped_region_t * mapped_region = &context->mapped_region;
+  return ((NULL == mapped_region->data) ||
+	  (block_id->offset < mapped_region->offset) ||
+	  (block_id->offset + block_id->size > mapped_region->offset + mapped_region->size));  
+}
+
+status_t
+mapped_region_lock (mapped_region_t * mapped_region, block_id_t * block_id)
+{
+  status_t status = ST_SUCCESS;
+  pthread_mutex_lock (&mapped_region->mutex);
+  if (mapped_region_misses_block (mapped_region, block_id))
+    status = ST_FAILURE;
+  else
+    ++mapped_region->ref_count;
+  pthread_mutex_unlock (&mapped_region->mutex);
+  return (status);
+}
+
+int
+mmap_mng_get_bucket (block_id_t * block_id)
+{
+  return ((block_id->offset / MAX_BLOCK_SIZE) % MR_COUNT);
+}
+
+void
+mmap_mng_init (mmap_mng_t * mmap_mng, int protect, int flags)
+{
+  int i;
+  memset (mmap_mng, 0, sizeof (*mmap_mng));
+  mmap_mng->protect = protect;
+  mmap_mng->flags = flags;
+  for (i = 0; i < MR_COUNT; ++i)
+    mapped_region_init (&mmap_mng->mapped_region[i]);
+}
+
+void
+mmap_mng_free (mmap_mng_t * mmap_mng)
+{
+  int i;
+  for (i = 0; i < MR_COUNT; ++i)
+    mapped_region_free (&mmap_mng->mapped_region[i]);
+  memset (mmap_mng, 0, sizeof (*mmap_mng));
+}
+
+void
+mmap_mng_unref (mmap_mng_t * mmap_mng, block_id_t * block_id)
+{
+  mapped_region_unref (&mmap_mng->mapped_region[mmap_mng_get_bucket (block_id)]);
+}
+
+status_t
+mmap_mng_lock (mmap_mng_t * mmap_mng, block_id_t * block_id)
+{
+  return (mapped_region_lock (&mmap_mng->mapped_region[mmap_mng_get_bucket (block_id)], block_id));
+}
+
+unsigned char *
+mmap_mng_get_addr (context_t * context, block_id_t * block_id)
+{
+  mapped_region_t * mapped_region = &context->mmap_mng.mapped_region[mmap_mng_get_bucket (block_id)];
   unsigned char * addr = NULL;
 
   pthread_mutex_lock (&mapped_region->mutex);
-  if ((NULL == mapped_region->data) ||
-      (block_id->offset < mapped_region->offset) ||
-      (block_id->offset + block_id->size > mapped_region->offset + mapped_region->size))
+  if (mapped_region_misses_block (mapped_region, block_id))
     {
       mapped_region_unmap (mapped_region);
       
@@ -80,7 +137,7 @@ mapped_region_get_addr (context_t * context, block_id_t * block_id)
 	mapped_region->size = context->size - mapped_region->offset;
   
       unsigned char * data = mmap64 (NULL, mapped_region->size,
-				     mapped_region->protect, mapped_region->flags,
+				     context->mmap_mng.protect, context->mmap_mng.flags,
 				     context->file_fd, mapped_region->offset);
   
       if (-1 == (long)data)

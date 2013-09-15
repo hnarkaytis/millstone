@@ -7,7 +7,7 @@
 #include <msg.h>
 #include <llist.h>
 #include <file_meta.h>
-#include <mapped_region.h>
+#include <mmap_mng.h>
 #include <client.h>
 
 #include <stddef.h> /* size_t, ssize_t */
@@ -64,7 +64,7 @@ static status_t
 send_block (client_t * client, block_id_t * block_id)
 {
   status_t status = ST_SUCCESS;
-  unsigned char * block_data = mapped_region_get_addr (client->connection->context, block_id);
+  unsigned char * block_data = mmap_mng_get_addr (client->connection->context, block_id);
 
   DUMP_VAR (block_id_t, block_id);
 
@@ -78,7 +78,7 @@ send_block (client_t * client, block_id_t * block_id)
     {
       int z_status = compress2 (buffer, &length, block_data, block_id->size,
 				client->connection->context->config->compress_level);
-      mapped_region_unref (&client->connection->context->mapped_region);
+      mmap_mng_unref (&client->connection->context->mmap_mng, block_id);
       
       if (Z_OK != z_status)
 	status = ST_FAILURE;
@@ -111,7 +111,7 @@ send_block (client_t * client, block_id_t * block_id)
 
 #ifdef HAVE_ZLIB
       if (client->connection->context->config->compress_level <= 0)
-	mapped_region_unref (&client->connection->context->mapped_region);
+	mmap_mng_unref (&client->connection->context->mmap_mng, block_id);
 #endif /* HAVE_ZLIB */
       
       for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
@@ -274,12 +274,12 @@ digest_calculator (void * arg)
       DUMP_VAR (msg_t, &msg);
       
       block_digest.block_id = msg.block_digest.block_id;
-      unsigned char * block_data = mapped_region_get_addr (client->connection->context, &block_digest.block_id);
+      unsigned char * block_data = mmap_mng_get_addr (client->connection->context, &block_digest.block_id);
       if (NULL == block_data)
 	break;
       
       SHA1 (block_data, block_digest.block_id.size, (unsigned char*)&block_digest.digest);
-      mapped_region_unref (&client->connection->context->mapped_region);
+      mmap_mng_unref (&client->connection->context->mmap_mng, &block_digest.block_id);
 
       msg.msg_type = MT_BLOCK_MATCHED;
       msg.block_matched.matched = !memcmp (block_digest.digest, msg.block_digest.digest, sizeof (block_digest.digest));
@@ -612,11 +612,11 @@ run_client (config_t * config)
   
   context.size = lseek64 (context.file_fd, 0, SEEK_END);
 
-  mapped_region_init (&context.mapped_region, PROT_READ, MAP_PRIVATE);
+  mmap_mng_init (&context.mmap_mng, PROT_READ, MAP_PRIVATE);
 
   status = create_server_socket (&context);
 
-  mapped_region_free (&context.mapped_region);
+  mmap_mng_free (&context.mmap_mng);
   
   close (context.file_fd);
 

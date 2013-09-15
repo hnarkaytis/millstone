@@ -13,6 +13,7 @@
 /mapped_region.o
 /millstone
 /millstone.o
+/mmap_mng.o
 /msg.o
 /mtu_tune.o
 /queue.o

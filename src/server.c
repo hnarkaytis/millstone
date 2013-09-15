@@ -8,7 +8,7 @@
 #include <msg.h>
 #include <sync_storage.h>
 #include <llist.h>
-#include <mapped_region.h>
+#include <mmap_mng.h>
 #include <mtu_tune.h>
 #include <server.h>
 
@@ -24,8 +24,6 @@
 #ifdef HAVE_ZLIB
 #include <zlib.h>
 #endif /* HAVE_ZLIB */
-
-#define MAX_TIP (1)
 
 TYPEDEF_STRUCT (task_t,
 		(block_id_t, block_id),
@@ -143,10 +141,10 @@ tip_dec (server_t * server)
 }
 
 static void
-wait_tip_low (server_t * server)
+wait_tip_low (server_t * server, int max_tip)
 {
   pthread_mutex_lock (&server->tip_mutex);
-  while (server->tip >= MAX_TIP)
+  while (server->tip > max_tip)
     pthread_cond_wait (&server->tip_cond, &server->tip_mutex);
   pthread_mutex_unlock (&server->tip_mutex);
 }
@@ -229,11 +227,11 @@ copy_duplicate (server_t * server, block_matched_t * block_matched)
     FATAL_MSG ("Failed to map file into memory. Error (%d) %s.\n", errno, strerror (errno));
   else
     {
-      unsigned char * dst = mapped_region_get_addr (server->connection->context, &block_matched->block_id);
+      unsigned char * dst = mmap_mng_get_addr (server->connection->context, &block_matched->block_id);
       if (dst != NULL)
 	{
 	  memcpy (dst, src, block_matched->block_id.size);
-	  mapped_region_unref (&server->connection->context->mapped_region);
+	  mmap_mng_unref (&server->connection->context->mmap_mng, &block_matched->block_id);
 	  status = ST_SUCCESS;
 	}
       if (0 != munmap (src, block_matched->duplicate_block_id.size))
@@ -369,12 +367,12 @@ server_worker (void * arg)
 
 	  DEBUG_MSG ("Calc digest for offset %zd status %d.", msg.block_id.offset, status);
 	  
-	  unsigned char * data = mapped_region_get_addr (server->connection->context, &msg.block_digest.block_id);
+	  unsigned char * data = mmap_mng_get_addr (server->connection->context, &msg.block_digest.block_id);
 	  if (NULL == data)
 	    break;
 	  
 	  SHA1 (data, msg.block_digest.block_id.size, (unsigned char*)&msg.block_digest.digest);
-	  mapped_region_unref (&server->connection->context->mapped_region);
+	  mmap_mng_unref (&server->connection->context->mmap_mng, &msg.block_digest.block_id);
 
 	  DEBUG_MSG ("Pushing to outgoing queue digest for offset %zd.", msg.block_id.offset);
 	  
@@ -481,9 +479,10 @@ data_retrieval (void * arg)
       if (ST_SUCCESS != status)
 	break;
 
-      wait_tip_low (server);
+      wait_tip_low (server, MAX_TIP);
     }
 
+  wait_tip_low (server, 0);
   if (ST_SUCCESS == status)
     send_terminate (server);
   
@@ -542,9 +541,10 @@ task_producer (void * arg)
       if (ST_SUCCESS != status)
 	break;
 
-      wait_tip_low (server);
+      wait_tip_low (server, MAX_TIP);
     }
 
+  wait_tip_low (server, 0);
   if (ST_SUCCESS == status)
     send_terminate (server);
   
@@ -618,7 +618,7 @@ handle_client (void * arg)
   context_t context;
   memset (&context, 0, sizeof (context));
   context.config = accepter_ctx.server_ctx->config;
-  mapped_region_init (&context.mapped_region, PROT_WRITE, MAP_SHARED);
+  mmap_mng_init (&context.mmap_mng, PROT_WRITE, MAP_SHARED);
 
   connection_t connection;
   memset (&connection, 0, sizeof (connection));
@@ -655,7 +655,7 @@ handle_client (void * arg)
 	status = start_cmd_reader (&server);
 
       sync_storage_del (&server.server_ctx->clients, &server);
-      mapped_region_free (&context.mapped_region);
+      mmap_mng_free (&context.mmap_mng);
       close (context.file_fd);
     }
   
@@ -795,17 +795,17 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
       return (ST_FAILURE);
     }
 
-  if (block_id->offset < server->connection->context->mapped_region.offset)
-    {
-      DEBUG_MSG ("Duplicated block for previous memory mapping. Block offset %zd current mapping from %zd.",
-		 block_id->offset, server->connection->context->mapped_region.offset);
-      return (ST_FAILURE);
-    }
-  
   /* unregister block in registry */
   sync_storage_del (&server->data_blocks, block_id);
-  
-  unsigned char * dst = mapped_region_get_addr (server->connection->context, block_id);
+
+  /* try to get temporary lock if mapping for block exists */
+  if (ST_SUCCESS != mmap_mng_lock (&server->connection->context->mmap_mng, block_id))
+    return (ST_FAILURE);
+
+  /* get address for block and release temporary lock */
+  unsigned char * dst = mmap_mng_get_addr (server->connection->context, block_id);
+  mmap_mng_unref (&server->connection->context->mmap_mng, block_id);
+
   if (NULL == dst)
     return (ST_FAILURE);
   
@@ -842,7 +842,7 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
       memcpy (dst, src, block_id->size);
     }
 
-  mapped_region_unref (&server->connection->context->mapped_region);
+  mmap_mng_unref (&server->connection->context->mmap_mng, block_id);
   
   DEBUG_MSG ("Write block done.");
   

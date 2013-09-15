@@ -26,6 +26,8 @@
 
 #define EXPECTED_PACKET_SIZE (1500 - 72) /* IPv6, TCP timestamps - 72 bytes */
 
+#define MAX_TIP (8)
+
 #ifndef SD_BOTH
 #define SD_BOTH (2)
 #endif /* SD_BOTH */
@@ -51,17 +53,21 @@ TYPEDEF_STRUCT (mapped_region_t,
 		int ref_count,
 		(pthread_mutex_t, mutex),
 		(pthread_cond_t, cond),
-		int protect,
-		int flags,
 		NONE (uint8_t *, data),
 		)		
+
+TYPEDEF_STRUCT (mmap_mng_t,
+		(mapped_region_t, mapped_region, [MAX_TIP]),
+		int protect,
+		int flags,
+		)
 
 TYPEDEF_STRUCT (context_t,
 		(config_t *, config),
 		(bool, file_exists),
 		int file_fd,
 		(size_t, size),
-		(mapped_region_t, mapped_region),
+		(mmap_mng_t, mmap_mng)
 		)
 
 TYPEDEF_STRUCT (connection_t,

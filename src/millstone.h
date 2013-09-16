@@ -20,13 +20,13 @@
 
 #define DEFAULT_LISTEN_PORT (31415)
 
-#define SPLIT_RATIO (1 << 7)
+#define SPLIT_RATIO (1 << 6)
 #define MIN_BLOCK_SIZE (PAGE_SIZE)
 #define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO * SPLIT_RATIO)
 
 #define EXPECTED_PACKET_SIZE (1500 - 72) /* IPv6, TCP timestamps - 72 bytes */
 
-#define MAX_TIP (8)
+#define MAX_TIP (16)
 
 #ifndef SD_BOTH
 #define SD_BOTH (2)

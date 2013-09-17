@@ -107,7 +107,7 @@ send_block (client_t * client, block_id_t * block_id)
       
       do {
 	rv = writev (client->connection->data_fd, iov, sizeof (iov) / sizeof (iov[0]));
-      } while ((-1 == rv) && ((EPERM == errno) || (EINTR == errno)));
+      } while ((-1 == rv) && ((EPERM == errno) || (EINTR == errno) || (ENOBUFS == errno)));
 
 #ifdef HAVE_ZLIB
       if (client->connection->context->config->compress_level <= 0)

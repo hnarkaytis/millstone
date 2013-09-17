@@ -40,6 +40,7 @@ TYPEDEF_STRUCT (server_ctx_t,
 
 TYPEDEF_STRUCT (server_t,
 		(connection_t *, connection),
+		int compress_level,
 		(llist_t, cmd_out),
 		(llist_t, task_queue),
 		(sync_storage_t, data_blocks),
@@ -288,8 +289,34 @@ block_sent (server_t * server, block_id_t * block_id)
   if (failure)
     {
       DEBUG_MSG ("Packet lost for offset 0x%zx.", block_id->offset);
-      
-      status = send_block_request (server, block_id);
+#ifdef HAVE_ZLIB
+      if (server->compress_level > 0)
+	{
+	  /* we need to split lost packets approximetly half-and-half */
+	  size_t size = block_id->size;
+	  int size_width = mtu_tune_get_width (size);
+	  /* standard packets will have size of 2^N and
+	     will be splitted in two equal parts.
+	     Last block of file might have arbitrary size. */
+	  if (size - (1 << (size_width - 1)) <= (1 << size_width))
+	    --size_width;
+	  /* do not split on blocks less then minimal size */
+	  if (size_width < MIN_TRANSFER_BLOCK_SIZE_BITS)
+	    size_width = MIN_TRANSFER_BLOCK_SIZE_BITS;
+	  block_id->size = 1 << size_width;
+	  /* send request for the first part */
+	  status = send_block_request (server, block_id);
+	  /* send request for the rest */
+	  if ((ST_SUCCESS == status) && (size > (1 << size_width)))
+	    {
+	      block_id->offset += 1 << size_width;
+	      block_id->size = size - (1 << size_width);
+	      status = send_block_request (server, block_id);
+	    }
+	}
+      else
+#endif /* HAVE_ZLIB */
+	status = send_block_request (server, block_id);
     }
   return (status);
 }
@@ -793,6 +820,8 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
       return (ST_FAILURE);
     }
 
+  /* set compress level into clients properties */
+  server->compress_level = *compress_level;
   /* unregister block in registry */
   sync_storage_del (&server->data_blocks, block_id);
 

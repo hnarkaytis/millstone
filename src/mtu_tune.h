@@ -24,6 +24,7 @@ TYPEDEF_STRUCT (mtu_tune_t,
 		(mtu_info_t, mtu_info, [MAX_TRANSFER_BLOCK_SIZE_BITS + 1]),
 		)
 
+extern int mtu_tune_get_width (int value);
 extern void mtu_tune_init (mtu_tune_t * mtu_tune);
 extern void mtu_tune_log (mtu_tune_t * mtu_tune, size_t size, bool failure);
 extern void mtu_tune_set_size (mtu_tune_t * mtu_tune, block_id_t * block_id);

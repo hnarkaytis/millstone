@@ -66,7 +66,7 @@ TYPEDEF_STRUCT (context_t,
 		(config_t *, config),
 		(bool, file_exists),
 		int file_fd,
-		(size_t, size),
+		(off64_t, size),
 		(mmap_mng_t, mmap_mng)
 		)
 

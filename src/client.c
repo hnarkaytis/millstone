@@ -370,20 +370,20 @@ client_cmd_reader (client_t * client)
 static status_t
 start_data_writer (client_t * client)
 {
-  int i, workers = (long)sysconf (_SC_NPROCESSORS_ONLN);
-  pthread_t ids[workers];
+  int i;
+  pthread_t ids[client->connection->context->config->workers_number];
   status_t status = ST_FAILURE;
 
-  DEBUG_MSG ("Start server workers %d.", workers);
-  
-  for (i = 0; i < workers; ++i)
+  DEBUG_MSG ("Start client data writers %d.", client->connection->context->config->workers_number);
+
+  for (i = 0; i < client->connection->context->config->workers_number; ++i)
     {
       int rv = pthread_create (&ids[i], NULL, client_data_writer, client);
       if (rv != 0)
 	break;
     }
 
-  DEBUG_MSG ("Started %d.", i);
+  DEBUG_MSG ("Started %d workers.", i);
   
   if (i > 0)
     status = client_cmd_reader (client);
@@ -428,13 +428,13 @@ start_cmd_writer (client_t * client)
 static status_t
 start_digest_calculators (client_t * client)
 {
-  int i, workers = (long) sysconf (_SC_NPROCESSORS_ONLN);
-  pthread_t ids[workers];
+  int i;
+  pthread_t ids[client->connection->context->config->workers_number];
   status_t status = ST_FAILURE;
 
-  DEBUG_MSG ("Starting digest calculators %d.", workers);
+  DEBUG_MSG ("Starting digest calculators %d.", client->connection->context->config->workers_number);
   
-  for (i = 0; i < workers; ++i)
+  for (i = 0; i < client->connection->context->config->workers_number; ++i)
     {
       int rv = pthread_create (&ids[i], NULL, digest_calculator, client);
       if (rv != 0)

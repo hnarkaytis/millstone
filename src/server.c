@@ -14,7 +14,7 @@
 
 #include <stddef.h> /* size_t, ssize_t */
 #include <signal.h> /* signal, SIG_IGN, SIGPIPE */
-#include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close, ftruncate64 */
+#include <unistd.h> /* TEMP_FAILURE_RETRY, close, ftruncate64 */
 #include <string.h> /* memcpy, strerror */
 #include <errno.h> /* errno */
 #include <sys/mman.h> /* mmap64, unmap */
@@ -453,13 +453,13 @@ server_cmd_writer (server_t * server)
 static status_t
 start_workers (server_t * server)
 {
-  int i, workers = (long) sysconf (_SC_NPROCESSORS_ONLN);
-  pthread_t ids[workers];
+  int i;
+  pthread_t ids[server->connection->context->config->workers_number];
   status_t status = ST_FAILURE;
 
-  DEBUG_MSG ("Start server workers %d.", workers);
+  DEBUG_MSG ("Start server workers %d.", server->connection->context->config->workers_number);
   
-  for (i = 0; i < workers; ++i)
+  for (i = 0; i < server->connection->context->config->workers_number; ++i)
     {
       int rv = pthread_create (&ids[i], NULL, server_worker, server);
       if (rv != 0)
@@ -929,13 +929,13 @@ server_data_reader (void * arg)
 static status_t
 start_data_readers (server_ctx_t * server_ctx)
 {
-  int i, workers = (long) sysconf (_SC_NPROCESSORS_ONLN);
-  pthread_t ids[workers];
+  int i;
+  pthread_t ids[server_ctx->config->workers_number];
   status_t status = ST_FAILURE;
 
-  DEBUG_MSG ("Starting %d data readers.", workers);
+  DEBUG_MSG ("Starting %d data readers.", server_ctx->config->workers_number);
   
-  for (i = 0; i < workers; ++i)
+  for (i = 0; i < server_ctx->config->workers_number; ++i)
     {
       int rv = pthread_create (&ids[i], NULL, server_data_reader, server_ctx);
       if (rv != 0)

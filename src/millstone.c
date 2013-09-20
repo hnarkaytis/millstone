@@ -6,7 +6,7 @@
 #include <client.h>
 #include <server.h>
 
-#include <unistd.h>
+#include <unistd.h> /* sysconf */
 #include <stdlib.h> /* EXIT_*, strtol */
 #include <string.h> /* memset, strchr */
 #include <getopt.h> /* getopt_long */
@@ -20,6 +20,44 @@
 
 #define DEFAULT_MEM_THRESHOLD (5)
 
+void
+cpu_id (unsigned i, unsigned regs[4])
+{
+#ifdef _WIN32
+  __cpuid ((int *)regs, (int)i);
+#else
+  asm volatile
+    ("cpuid" : "=a" (regs[0]), "=b" (regs[1]), "=c" (regs[2]), "=d" (regs[3])
+     : "a" (i), "c" (0));
+  /* ECX is set to zero for CPUID function 4 */
+#endif
+}
+
+int
+get_cores ()
+{
+  int cores = (long) sysconf (_SC_NPROCESSORS_ONLN);
+  unsigned int regs[4];
+  char vendor[sizeof (regs) + 1];
+
+  memset (vendor, 0, sizeof (vendor));
+  cpu_id (0, (void*)vendor); /* Get vendor */
+  if (strcmp (vendor, "GenuineIntel") == 0)
+    {
+      /* Get DCP cache info */
+      cpu_id (4, regs);
+      cores = ((regs[0] >> 26) & 0x3f) + 1; /* EAX[31:26] + 1 */
+    }
+  else if (strcmp (vendor, "AuthenticAMD") == 0)
+    {
+      /* Get NC: Number of CPU cores - 1 */
+      cpu_id (0x80000008, regs);
+      cores = ((unsigned)(regs[2] & 0xff)) + 1; /* ECX[7:0] + 1 */
+    }
+  
+  return (cores);
+}
+
 static status_t
 parse_args (int argc, char * argv[], config_t * config)
 {
@@ -27,6 +65,7 @@ parse_args (int argc, char * argv[], config_t * config)
   static struct option long_options[] =
     {
       /* These options set a flag. */
+      {"workers", required_argument, NULL, 'w'},
       {"compress", required_argument, NULL, 'c'},
       {"log-level", required_argument, NULL, 'l'},
       {"memory-threshold", required_argument, NULL, 'm'},
@@ -40,8 +79,9 @@ parse_args (int argc, char * argv[], config_t * config)
   config->dst_port = DEFAULT_LISTEN_PORT;
   config->mem_threshold = DEFAULT_MEM_THRESHOLD;
   config->compress_level = DEFAULT_COMPRESS_LEVEL;
+  config->workers_number = get_cores ();
   
-  while ((c = getopt_long (argc, argv, "c:l:", long_options, &option_index)) != -1)
+  while ((c = getopt_long (argc, argv, "c:l:w:", long_options, &option_index)) != -1)
     switch (c)
       {
       case 0:
@@ -57,6 +97,11 @@ parse_args (int argc, char * argv[], config_t * config)
       case 'c':
 	if (optarg)
 	  config->compress_level = atoi (optarg);
+	break;
+	
+      case 'w':
+	if (optarg)
+	  config->workers_number = atoi (optarg);
 	break;
 	
       case 'm':
@@ -76,6 +121,8 @@ parse_args (int argc, char * argv[], config_t * config)
 #ifndef HAVE_ZLIB
   config->compress_level = DEFAULT_COMPRESS_LEVEL;
 #endif /* HAVE_ZLIB */
+  if (config->workers_number <= 0)
+    config->workers_number = 1;
   
   if (argc - optind == 0)
     config->run_mode = RM_SERVER;

@@ -45,6 +45,7 @@ TYPEDEF_STRUCT (config_t,
 		int listen_port,
 		int mem_threshold,
 		int32_t compress_level,
+		int workers_number,
 		)
 
 TYPEDEF_STRUCT (mapped_region_t,

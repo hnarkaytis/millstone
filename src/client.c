@@ -20,7 +20,8 @@
 #include <sys/sysinfo.h> /* _SC_NPROCESSORS_ONLN */
 #include <sys/uio.h> /* writev, struct iovec */
 #include <sys/mman.h> /* mmap64, unmap */
-#include <sys/socket.h> /* socket, shutdown, connect */
+#include <sys/socket.h> /* socket, shutdown, connect, setsockopt */
+#include <netinet/tcp.h> /* TCP_NODELAY */
 
 #include <openssl/sha.h> /* SHA1 */
 #include <pthread.h>
@@ -168,7 +169,7 @@ client_cmd_writer (void * arg)
 {
   client_t * client = arg;
   char buf[EXPECTED_PACKET_SIZE];
-  
+
   DEBUG_MSG ("Enter client command writer.");
   
   memset (buf, 0, sizeof (buf));
@@ -558,6 +559,9 @@ connect_to_server (connection_t * connection)
       ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
       return (ST_FAILURE);
     }
+
+  bool tcp_nodelay = TRUE;
+  setsockopt (connection->cmd_fd, SOL_TCP, TCP_NODELAY, &tcp_nodelay, sizeof (tcp_nodelay));
 
   DEBUG_MSG ("Connected to server successfully.");
   

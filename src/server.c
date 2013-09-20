@@ -18,6 +18,8 @@
 #include <string.h> /* memcpy, strerror */
 #include <errno.h> /* errno */
 #include <sys/mman.h> /* mmap64, unmap */
+#include <sys/socket.h> /* setsockopt */
+#include <netinet/tcp.h> /* TCP_NODELAY */
 
 #include <openssl/sha.h> /* SHA1 */
 #include <pthread.h>
@@ -650,7 +652,9 @@ handle_client (void * arg)
   connection.context = &context;
   connection.cmd_fd = accepter_ctx.fd;
   connection.remote.sin_addr = accepter_ctx.remote.sin_addr;
-
+  bool tcp_nodelay = TRUE;
+  setsockopt (connection.cmd_fd, SOL_TCP, TCP_NODELAY, &tcp_nodelay, sizeof (tcp_nodelay));
+  
   server_t server;
   memset (&server, 0, sizeof (server));
   server.connection = &connection;
@@ -701,7 +705,7 @@ handle_client (void * arg)
 static status_t
 run_accepter (server_ctx_t * server_ctx)
 {
-  int reuse_addr = !0;
+  bool reuse_addr = TRUE;
   struct linger linger_opt = { .l_onoff = 1, .l_linger = 1, };
 
   DEBUG_MSG ("Apply options on server command socket.");

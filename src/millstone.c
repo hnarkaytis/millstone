@@ -110,6 +110,7 @@ parse_args (int argc, char * argv[], config_t * config)
 #endif /* HAVE_ZLIB */
   if (config->workers_number <= 0)
     config->workers_number = 1;
+  INFO_MSG ("Workers %d.", config->workers_number);
   
   if (argc - optind == 0)
     config->run_mode = RM_SERVER;

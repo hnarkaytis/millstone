@@ -38,23 +38,10 @@ get_cores ()
 {
   int cores = (long) sysconf (_SC_NPROCESSORS_ONLN);
   unsigned int regs[4];
-  char vendor[sizeof (regs) + 1];
 
-  memset (vendor, 0, sizeof (vendor));
-  cpu_id (0, (void*)vendor); /* Get vendor */
-  if (strcmp (vendor, "GenuineIntel") == 0)
-    {
-      /* Get DCP cache info */
-      cpu_id (4, regs);
-      cores = ((regs[0] >> 26) & 0x3f) + 1; /* EAX[31:26] + 1 */
-    }
-  else if (strcmp (vendor, "AuthenticAMD") == 0)
-    {
-      /* Get NC: Number of CPU cores - 1 */
-      cpu_id (0x80000008, regs);
-      cores = ((unsigned)(regs[2] & 0xff)) + 1; /* ECX[7:0] + 1 */
-    }
-  
+  cpu_id (1, regs); /* Get CPU features */
+  if (regs[3] & (1 << 28)) /* EDX:28 - hyper-threading */
+    cores >>= 1;
   return (cores);
 }
 

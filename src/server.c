@@ -549,6 +549,7 @@ start_data_retrieval (server_t * server)
   DEBUG_MSG ("Canceling data retrieval thread.");
 
   llist_cancel (&server->cmd_out);
+  tip_cancel (server);
   pthread_join (id, NULL);
   
   DEBUG_MSG ("Data retrieval thread canceled.");
@@ -608,6 +609,7 @@ start_task_producer (server_t * server)
   DEBUG_MSG ("Canceling tasks producer thread.");
   
   llist_cancel (&server->task_queue);
+  tip_cancel (server);
   pthread_join (id, NULL);
   
   DEBUG_MSG ("Tasks producer thread canceled.");
@@ -638,7 +640,6 @@ start_cmd_reader (server_t * server)
 
   DEBUG_MSG ("Canceling command reader thread.");
 
-  tip_cancel (server);
   llist_cancel (&server->cmd_out);
   llist_cancel (&server->task_queue);
   pthread_join (id, NULL);

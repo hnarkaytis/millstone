@@ -144,7 +144,16 @@ tip_dec (server_t * server)
 }
 
 static void
-wait_tip_low (server_t * server, int max_tip)
+tip_cancel (server_t * server)
+{
+  pthread_mutex_lock (&server->tip_mutex);
+  server->tip = 0;
+  pthread_cond_broadcast (&server->tip_cond);
+  pthread_mutex_unlock (&server->tip_mutex);
+}
+
+static void
+tip_wait_low (server_t * server, int max_tip)
 {
   pthread_mutex_lock (&server->tip_mutex);
   while (server->tip > max_tip)
@@ -509,10 +518,10 @@ data_retrieval (void * arg)
       if (ST_SUCCESS != status)
 	break;
 
-      wait_tip_low (server, MAX_TIP);
+      tip_wait_low (server, MAX_TIP);
     }
 
-  wait_tip_low (server, 0);
+  tip_wait_low (server, 0);
   if (ST_SUCCESS == status)
     send_terminate (server);
   
@@ -571,10 +580,10 @@ task_producer (void * arg)
       if (ST_SUCCESS != status)
 	break;
 
-      wait_tip_low (server, MAX_TIP);
+      tip_wait_low (server, MAX_TIP);
     }
 
-  wait_tip_low (server, 0);
+  tip_wait_low (server, 0);
   if (ST_SUCCESS == status)
     send_terminate (server);
   
@@ -628,7 +637,8 @@ start_cmd_reader (server_t * server)
     status = start_task_producer (server);
 
   DEBUG_MSG ("Canceling command reader thread.");
-  
+
+  tip_cancel (server);
   llist_cancel (&server->cmd_out);
   llist_cancel (&server->task_queue);
   pthread_join (id, NULL);

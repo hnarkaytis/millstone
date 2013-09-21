@@ -40,8 +40,13 @@ get_cores ()
   unsigned int regs[4];
   char vendor[sizeof (regs)];
   unsigned int * vendor_ui = (void*)vendor;
+  int physical, logical;
   
   memset (vendor, 0, sizeof (vendor));
+
+  cpu_id (1, regs);
+  logical = (regs[1] >> 16) & 0xff; /* EBX[23:16] */
+
   cpu_id (0, regs); /* Get vendor */
   vendor_ui[0] = regs[1]; /* EBX */
   vendor_ui[1] = regs[3]; /* EDX */
@@ -51,16 +56,18 @@ get_cores ()
     {
       /* Get DCP cache info */
       cpu_id (4, regs);
-      cores = ((regs[0] >> 26) & 0x3f) + 1; /* EAX[31:26] + 1 */
+      physical = ((regs[0] >> 26) & 0x3f) + 1; /* EAX[31:26] + 1 */
     }
   else if (strcmp (vendor, "AuthenticAMD") == 0)
     {
       /* Get NC: Number of CPU cores - 1 */
       cpu_id (0x80000008, regs);
-      cores = ((unsigned)(regs[2] & 0xff)) + 1; /* ECX[7:0] + 1 */
+      physical = ((unsigned)(regs[2] & 0xff)) + 1; /* ECX[7:0] + 1 */
     }
+  else
+    physical = logical;
 
-  return (cores);
+  return ((cores * physical) / logical);
 }
 
 static status_t

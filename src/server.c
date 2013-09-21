@@ -291,6 +291,9 @@ block_sent (server_t * server, block_id_t * block_id)
   if (failure)
     {
       DEBUG_MSG ("Packet lost for offset 0x%zx.", block_id->offset);
+
+      sync_storage_del (&server->data_blocks, block_id);
+      
 #ifdef HAVE_ZLIB
       if (server->compress_level > 0)
 	{

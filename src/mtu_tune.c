@@ -87,12 +87,12 @@ mtu_tune_log (mtu_tune_t * mtu_tune, size_t size, bool failure)
   
   if (mtu == mtu_tune->current_mtu)
     if (mtu_tune->current_mtu > MIN_TRANSFER_BLOCK_SIZE_BITS)
-      if (bit_count (mtu_info->log) >= ((CHAR_BIT * sizeof (mtu_info->log)) >> 1))
+      if (bit_count (mtu_info->log) > ((CHAR_BIT * sizeof (mtu_info->log)) >> 1))
 	--mtu_tune->current_mtu;
 
   if ((mtu == mtu_tune->current_mtu + 1) && !failure)
     if (mtu_tune->current_mtu < MAX_TRANSFER_BLOCK_SIZE_BITS)
-      if (bit_count (mtu_info->log) < ((CHAR_BIT * sizeof (mtu_info->log)) >> 1))
+      if (bit_count (mtu_info->log) <= ((CHAR_BIT * sizeof (mtu_info->log)) >> 1))
 	mtu_tune->current_mtu = mtu;
 }
 

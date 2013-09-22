@@ -138,9 +138,9 @@ static void
 tip_dec (server_t * server)
 {
   pthread_mutex_lock (&server->tip_mutex);
-  if (--server->tip < MAX_TIP)
-    pthread_cond_broadcast (&server->tip_cond);
+  --server->tip;
   pthread_mutex_unlock (&server->tip_mutex);
+  pthread_cond_broadcast (&server->tip_cond);
 }
 
 static void
@@ -148,8 +148,8 @@ tip_cancel (server_t * server)
 {
   pthread_mutex_lock (&server->tip_mutex);
   server->tip = 0;
-  pthread_cond_broadcast (&server->tip_cond);
   pthread_mutex_unlock (&server->tip_mutex);
+  pthread_cond_broadcast (&server->tip_cond);
 }
 
 static void
@@ -505,7 +505,7 @@ data_retrieval (void * arg)
   DEBUG_MSG ("Data retrieval thread has started.");
   
   memset (&block_id, 0, sizeof (block_id));
-  block_id.size = MAX_BLOCK_SIZE;
+  block_id.size = MIN_BLOCK_SIZE * SPLIT_RATIO;
 
   for (block_id.offset = 0;
        block_id.offset < server->connection->context->size;
@@ -518,7 +518,7 @@ data_retrieval (void * arg)
       if (ST_SUCCESS != status)
 	break;
 
-      tip_wait_low (server, MAX_TIP);
+      tip_wait_low (server, MAX_TIP * SPLIT_RATIO);
     }
 
   tip_wait_low (server, 0);
@@ -684,7 +684,7 @@ handle_client (void * arg)
   mtu_tune_init (&server.mtu_tune);
   
   LLIST_INIT (&server.task_queue, task_t, -1);
-  LLIST_INIT (&server.cmd_out, msg_t, EXPECTED_PACKET_SIZE / sizeof (msg_t));
+  LLIST_INIT (&server.cmd_out, msg_t, -1);
 
   DEBUG_MSG ("Context for new client inited. Read file meta from client.");
   

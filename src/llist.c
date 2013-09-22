@@ -59,6 +59,13 @@ llist_pop_bulk (llist_t * llist, void * buf, size_t * buf_size)
   char * char_buf = buf;
   llist_slot_t * first_slot = NULL;
   status_t status = ST_FAILURE;
+  size_t count = *buf_size / llist->elem_size;
+
+  if (count <= 0)
+    {
+      *buf_size = 0;
+      return (ST_SUCCESS);
+    }
   
   pthread_mutex_lock (&llist->mutex);
   while ((llist->count == 0) && (!llist->cancel))
@@ -67,9 +74,8 @@ llist_pop_bulk (llist_t * llist, void * buf, size_t * buf_size)
   if (!llist->cancel)
     {
       llist_slot_t * last_slot = first_slot = llist->queue.prev;
-      size_t count;
 
-      for (count = *buf_size / llist->elem_size; (count > 0) && (llist->count > 0); --count)
+      for ( ; (count > 0) && (llist->count > 0); --count)
 	{
 	  last_slot = last_slot->prev;
 	  --llist->count;

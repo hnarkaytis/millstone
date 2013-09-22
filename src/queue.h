@@ -12,7 +12,9 @@
 #include <metaresc.h>
 
 TYPEDEF_STRUCT (queue_t,
-		(mr_rarray_t *, array),
+		(void *, array),
+		(char *, elem_type),
+		RARRAY (mr_ptr_t, typed_array, "elem_type"),
 		(size_t, elem_size),
 		int count,
 		int used,
@@ -24,9 +26,10 @@ TYPEDEF_STRUCT (queue_t,
 		(pthread_cond_t, empty),
 		)
 
-extern void queue_init (queue_t * queue, mr_rarray_t * array, size_t elem_size);
+extern status_t queue_init (queue_t * queue, size_t elem_size, int count, char * elem_type);
 extern status_t queue_push (queue_t * queue, void * element);
 extern status_t queue_pop (queue_t * queue, void * element);
+extern status_t queue_pop_bulk (queue_t * queue, void * buf, size_t * buf_size);
 extern void queue_cancel (queue_t * queue);
 
 #endif /* _QUEUE_H_ */

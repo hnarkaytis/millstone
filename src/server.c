@@ -8,6 +8,7 @@
 #include <msg.h>
 #include <sync_storage.h>
 #include <llist.h>
+#include <queue.h>
 #include <mmap_mng.h>
 #include <mtu_tune.h>
 #include <server.h>
@@ -43,7 +44,7 @@ TYPEDEF_STRUCT (server_ctx_t,
 TYPEDEF_STRUCT (server_t,
 		(connection_t *, connection),
 		int compress_level,
-		(llist_t, cmd_out),
+		(queue_t, cmd_out),
 		(llist_t, task_queue),
 		(sync_storage_t, data_blocks),
 		(mtu_tune_t, mtu_tune),
@@ -175,7 +176,7 @@ static status_t
 msg_push (server_t * server, msg_t * msg)
 {
   tip_inc (server);
-  status_t status = llist_push (&server->cmd_out, msg);
+  status_t status = queue_push (&server->cmd_out, msg);
   if (ST_SUCCESS != status)
     tip_dec (server);
   return (status);
@@ -373,7 +374,7 @@ server_cmd_reader (void * arg)
 	break;
     }
 
-  llist_cancel (&server->cmd_out);
+  queue_cancel (&server->cmd_out);
   DEBUG_MSG ("Exiting server command reader thread.");
   
   return (NULL);
@@ -445,7 +446,7 @@ server_cmd_writer (server_t * server)
   for (;;)
     {
       size_t buf_size = sizeof (buf);
-      status = llist_pop_bulk (&server->cmd_out, buf, &buf_size);
+      status = queue_pop_bulk (&server->cmd_out, buf, &buf_size);
       if (ST_SUCCESS != status)
 	break;
       
@@ -486,7 +487,7 @@ start_workers (server_t * server)
   DEBUG_MSG ("Canceling server workers.");
   
   llist_cancel (&server->task_queue);
-  llist_cancel (&server->cmd_out);
+  queue_cancel (&server->cmd_out);
   for (--i ; i >= 0; --i)
     pthread_join (ids[i], NULL);
   
@@ -548,7 +549,7 @@ start_data_retrieval (server_t * server)
 
   DEBUG_MSG ("Canceling data retrieval thread.");
 
-  llist_cancel (&server->cmd_out);
+  queue_cancel (&server->cmd_out);
   tip_cancel (server);
   pthread_join (id, NULL);
   
@@ -640,7 +641,7 @@ start_cmd_reader (server_t * server)
 
   DEBUG_MSG ("Canceling command reader thread.");
 
-  llist_cancel (&server->cmd_out);
+  queue_cancel (&server->cmd_out);
   llist_cancel (&server->task_queue);
   pthread_join (id, NULL);
   
@@ -681,12 +682,14 @@ handle_client (void * arg)
   sync_storage_init (&server.data_blocks, block_id_compar, block_id_hash, block_id_free, "block_id_t", NULL);
   mtu_tune_init (&server.mtu_tune);
   
-  LLIST_INIT (&server.cmd_out, msg_t);
   LLIST_INIT (&server.task_queue, task_t);
 
   DEBUG_MSG ("Context for new client inited. Read file meta from client.");
   
-  status_t status = read_file_meta (&connection); /* reads UDP port of remote into connection_t and opens file for write */
+  status_t status = queue_init (&server.cmd_out, sizeof (msg_t), EXPECTED_PACKET_SIZE / sizeof (msg_t), "msg_t");
+
+  if (ST_SUCCESS == status)
+    status = read_file_meta (&connection); /* reads UDP port of remote into connection_t and opens file for write */
 
   if (ST_SUCCESS == status)
     {
@@ -707,7 +710,7 @@ handle_client (void * arg)
 
   /* free allocated slots */
   llist_cancel (&server.task_queue);
-  llist_cancel (&server.cmd_out);
+  queue_cancel (&server.cmd_out);
   
   sync_storage_free (&server.data_blocks);
 

@@ -668,6 +668,8 @@ handle_client (void * arg)
   connection.remote.sin_addr = accepter_ctx.remote.sin_addr;
   bool tcp_nodelay = TRUE;
   setsockopt (connection.cmd_fd, SOL_TCP, TCP_NODELAY, &tcp_nodelay, sizeof (tcp_nodelay));
+  size_t buf_size = EXPECTED_PACKET_SIZE;
+  setsockopt (connection.cmd_fd, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof (buf_size));
   
   server_t server;
   memset (&server, 0, sizeof (server));

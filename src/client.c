@@ -472,9 +472,9 @@ run_session (connection_t * connection)
   if (ST_SUCCESS != status)
     return (status);
   
-  LLIST_INIT (&client.cmd_out, msg_t);
-  LLIST_INIT (&client.cmd_in, msg_t);
-  LLIST_INIT (&client.data_in, msg_t);
+  LLIST_INIT (&client.cmd_out, msg_t, -1);
+  LLIST_INIT (&client.cmd_in, msg_t, -1);
+  LLIST_INIT (&client.data_in, msg_t, -1);
 
   status = dedup_init (&client.dedup, connection->context->config->mem_threshold);
   if (ST_SUCCESS != status)

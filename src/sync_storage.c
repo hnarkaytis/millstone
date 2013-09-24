@@ -2,6 +2,7 @@
 #include <logging.h>
 #include <sync_storage.h>
 
+#include <setjmp.h>
 #include <pthread.h>
 #include <metaresc.h>
 
@@ -29,24 +30,23 @@ sync_storage_add (sync_storage_t * sync_storage, mr_ptr_t mr_ptr)
   return (status);
 }
 
-void
+status_t
 sync_storage_del (sync_storage_t * sync_storage, mr_ptr_t mr_ptr)
 {
+  status_t status = ST_FAILURE;
   sync_rb_tree_t * bucket = get_backet (sync_storage, mr_ptr);
   pthread_mutex_lock (&bucket->mutex);
-  if (sync_storage->free_fn == NULL)
-    mr_tdelete (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
-  else
+  mr_ptr_t * find = mr_tfind (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
+  if (find != NULL)
     {
-      mr_ptr_t * find = mr_tfind (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
-      if (find != NULL)
-	{
-	  mr_ptr_t found_node = *find;
-	  mr_tdelete (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
-	  sync_storage->free_fn (found_node, sync_storage->context);
-	}
+      mr_ptr_t found_node = *find;
+      mr_tdelete (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
+      if (sync_storage->free_fn != NULL)
+	sync_storage->free_fn (found_node, sync_storage->context);
+      status = ST_SUCCESS;
     }
   pthread_mutex_unlock (&bucket->mutex);
+  return (status);
 }
 
 mr_ptr_t *
@@ -81,8 +81,22 @@ dummy_free_fn (mr_ptr_t key, const void * context)
 {
 }
 
-void
-sync_storage_free (sync_storage_t * sync_storage)
+TYPEDEF_STRUCT (sync_storage_rbtree_foreach_context_t,
+		(sync_storage_t *, sync_storage),
+		(mr_visit_fn_t, visit_fn),
+		(jmp_buf, jmp_buf))
+
+static void
+visit_node (const mr_red_black_tree_node_t * node, mr_rb_visit_order_t order, int level, const void * context)
+{
+  sync_storage_rbtree_foreach_context_t * ssrbtfc = (void*)context;
+  if ((MR_RB_VISIT_POSTORDER == order) || (MR_RB_VISIT_LEAF == order))
+    if (MR_SUCCESS != ssrbtfc->visit_fn (node->key, ssrbtfc->sync_storage->context))
+      longjmp (ssrbtfc->jmp_buf, !0);
+}
+
+status_t
+sync_storage_yeld (sync_storage_t * sync_storage, mr_visit_fn_t visit_fn)
 {
   int i;
   mr_free_fn_t free_fn = sync_storage->free_fn;
@@ -93,8 +107,27 @@ sync_storage_free (sync_storage_t * sync_storage)
   for (i = 0; i < sizeof (sync_storage->table) / sizeof (sync_storage->table[0]); ++i)
     {
       pthread_mutex_lock (&sync_storage->table[i].mutex);
+      sync_storage_rbtree_foreach_context_t ssrbtfc = {
+	.sync_storage = sync_storage,
+	.visit_fn = visit_fn,
+      };
+
+      if (visit_fn != NULL)
+	{
+	  if (0 != setjmp (ssrbtfc.jmp_buf))
+	    visit_fn = NULL;
+	  else
+	    mr_twalk (sync_storage->table[i].tree, visit_node, &ssrbtfc);
+	}
       mr_tdestroy (sync_storage->table[i].tree, free_fn, sync_storage->context);
+      sync_storage->table[i].tree = NULL;
       pthread_mutex_unlock (&sync_storage->table[i].mutex);
     }
-  memset (sync_storage, 0, sizeof (sync_storage));
-}  
+  return ((visit_fn == NULL) ? ST_FAILURE : ST_SUCCESS);
+}
+
+void
+sync_storage_free (sync_storage_t * sync_storage)
+{
+  sync_storage_yeld (sync_storage, NULL);
+}

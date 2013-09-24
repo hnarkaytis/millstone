@@ -159,6 +159,10 @@ client_data_writer (void * arg)
 	break;
     }
 
+  llist_cancel (&client->data_in);
+  llist_cancel (&client->cmd_in);
+  llist_cancel (&client->cmd_out);
+
   DEBUG_MSG ("Exiting client data writer.");
   
   return (NULL);
@@ -190,6 +194,9 @@ client_cmd_writer (void * arg)
     }
   
   shutdown (client->connection->cmd_fd, SD_BOTH);
+  llist_cancel (&client->data_in);
+  llist_cancel (&client->cmd_in);
+  llist_cancel (&client->cmd_out);
   
   DEBUG_MSG ("Exiting client command writer.");
   
@@ -314,14 +321,19 @@ digest_calculator (void * arg)
       DEBUG_MSG ("Message pushed.");
     }
 
+  llist_cancel (&client->data_in);
+  llist_cancel (&client->cmd_in);
+  llist_cancel (&client->cmd_out);
+
   DEBUG_MSG ("Exiting digest calculator.");
   
   return (NULL);
 }
 
 static status_t
-client_cmd_reader (client_t * client)
+client_cmd_reader (void * arg)
 {
+  client_t * client = arg;
   status_t status;
 
   for (;;)
@@ -362,100 +374,26 @@ client_cmd_reader (client_t * client)
 	break;
     }
   
+  llist_cancel (&client->data_in);
+  llist_cancel (&client->cmd_in);
+  llist_cancel (&client->cmd_out);
+
   DEBUG_MSG ("Exiting client command reader.");
   
   return (status);
 }
 
 static status_t
-start_data_writer (client_t * client)
+start_cmd_writer (void * arg)
 {
-  int i;
-  pthread_t ids[client->connection->context->config->workers_number];
-  status_t status = ST_FAILURE;
-
-  DEBUG_MSG ("Start client data writers %d.", client->connection->context->config->workers_number);
-
-  for (i = 0; i < client->connection->context->config->workers_number; ++i)
-    {
-      int rv = pthread_create (&ids[i], NULL, client_data_writer, client);
-      if (rv != 0)
-	break;
-    }
-
-  DEBUG_MSG ("Started %d workers.", i);
-  
-  if (i > 0)
-    status = client_cmd_reader (client);
-
-  DEBUG_MSG ("Canceling data writer.");
-  
-  llist_cancel (&client->data_in);
-  llist_cancel (&client->cmd_out);
-  for (--i ; i >= 0; --i)
-    pthread_join (ids[i], NULL);
-  
-  DEBUG_MSG ("Command data canceled.");
-
-  return (status);
+  return (start_threads (client_cmd_writer, 1, client_cmd_reader, arg));
 }
 
 static status_t
-start_cmd_writer (client_t * client)
+start_data_writers (void * arg)
 {
-  pthread_t id;
-  int rv = pthread_create (&id, NULL, client_cmd_writer, client);
-  if (rv != 0)
-    {
-      ERROR_MSG ("Failed to start command writer thread");
-      return (ST_FAILURE);
-    }
-  
-  DEBUG_MSG ("Client command writer started %d.", rv);
-
-  status_t status = start_data_writer (client);
-  
-  DEBUG_MSG ("Canceling command writer.");
-  
-  llist_cancel (&client->cmd_out);
-  pthread_join (id, NULL);
-  
-  DEBUG_MSG ("Command writer canceled.");
-  
-  return (status);
-}
-
-static status_t
-start_digest_calculators (client_t * client)
-{
-  int i;
-  pthread_t ids[client->connection->context->config->workers_number];
-  status_t status = ST_FAILURE;
-
-  DEBUG_MSG ("Starting digest calculators %d.", client->connection->context->config->workers_number);
-  
-  for (i = 0; i < client->connection->context->config->workers_number; ++i)
-    {
-      int rv = pthread_create (&ids[i], NULL, digest_calculator, client);
-      if (rv != 0)
-	break;
-    }
-
-  DEBUG_MSG ("Started %d.", i);
-  
-  if (i > 0)
-    status = start_cmd_writer (client);
-
-  DEBUG_MSG ("Canceling digest calculators.");
-  
-  llist_cancel (&client->cmd_in);
-  llist_cancel (&client->cmd_out);
-  for (--i ; i >= 0; --i)
-    pthread_join (ids[i], NULL);
-  
-  DEBUG_MSG ("Digest calculators canceled.");
-  
-  return (status);
+  client_t * client = arg;
+  return (start_threads (client_data_writer, client->connection->context->config->workers_number, start_cmd_writer, client));
 }
 
 static status_t
@@ -482,7 +420,7 @@ run_session (connection_t * connection)
   
   DEBUG_MSG ("Session inited with.");
   
-  status = start_digest_calculators (&client);
+  status = start_threads (digest_calculator, connection->context->config->workers_number, start_data_writers, &client);
 
   dedup_free (&client.dedup);
 

@@ -144,12 +144,14 @@ tip_dec (server_t * server)
 }
 
 static void
-tip_cancel (server_t * server)
+server_cancel (server_t * server)
 {
   pthread_mutex_lock (&server->tip_mutex);
   server->tip = 0;
   pthread_mutex_unlock (&server->tip_mutex);
   pthread_cond_broadcast (&server->tip_cond);
+  llist_cancel (&server->task_queue);
+  llist_cancel (&server->cmd_out);
 }
 
 static void
@@ -292,7 +294,7 @@ static status_t
 block_sent (server_t * server, block_id_t * block_id)
 {
   status_t status = ST_SUCCESS;
-  bool failure = (NULL != sync_storage_find (&server->data_blocks, block_id));
+  bool failure = (ST_SUCCESS == sync_storage_del (&server->data_blocks, block_id));
   
   DEBUG_MSG ("Got confirmation for block %zd:%zd.", block_id->offset, block_id->size);
   
@@ -300,8 +302,6 @@ block_sent (server_t * server, block_id_t * block_id)
   if (failure)
     {
       DEBUG_MSG ("Packet lost for offset 0x%zx.", block_id->offset);
-
-      sync_storage_del (&server->data_blocks, block_id);
       
 #ifdef HAVE_ZLIB
       if (server->compress_level > 0)
@@ -333,50 +333,6 @@ block_sent (server_t * server, block_id_t * block_id)
 	status = send_block_request (server, block_id);
     }
   return (status);
-}
-
-static void *
-server_cmd_reader (void * arg)
-{
-  server_t * server = arg;
-
-  DEBUG_MSG ("Started server command reader.");
-  
-  for (;;)
-    {
-      msg_t msg;
-      status_t status = msg_recv (server->connection->cmd_fd, &msg);
-
-      if (ST_SUCCESS != status)
-	break;
-
-      DUMP_VAR (msg_t, &msg);
-      
-      switch (msg.msg_type)
-	{
-	case MT_BLOCK_MATCHED:
-	  status = block_matched (server, &msg.block_matched);
-	  break;
-	case MT_BLOCK_SEND_ERROR:
-	  ERROR_MSG ("Client failed to send data block (offset %zd size %zd).",
-		     msg.block_id.offset, msg.block_id.size);
-	case MT_BLOCK_SENT:
-	  status = block_sent (server, &msg.block_id);
-	  break;
-	default:
-	  status = ST_FAILURE;
-	  break;
-	}
-      tip_dec (server);
-      
-      if (ST_SUCCESS != status)
-	break;
-    }
-
-  llist_cancel (&server->cmd_out);
-  DEBUG_MSG ("Exiting server command reader thread.");
-  
-  return (NULL);
 }
 
 static void *
@@ -433,9 +389,10 @@ server_worker (void * arg)
   return (NULL);
 }
 
-static status_t
-server_cmd_writer (server_t * server)
+static void *
+server_cmd_writer (void * arg)
 {
+  server_t * server = arg;
   status_t status = ST_SUCCESS;
   char buf[EXPECTED_PACKET_SIZE];
   
@@ -457,107 +414,59 @@ server_cmd_writer (server_t * server)
 	break;
     }
   
+  server_cancel (server);
+
   DEBUG_MSG ("Exiting server command writer.");
   
-  return (status);
-}
-
-static status_t
-start_workers (server_t * server)
-{
-  int i;
-  pthread_t ids[server->connection->context->config->workers_number];
-  status_t status = ST_FAILURE;
-
-  DEBUG_MSG ("Start server workers %d.", server->connection->context->config->workers_number);
-  
-  for (i = 0; i < server->connection->context->config->workers_number; ++i)
-    {
-      int rv = pthread_create (&ids[i], NULL, server_worker, server);
-      if (rv != 0)
-	break;
-    }
-
-  DEBUG_MSG ("Started %d.", i);
-  
-  if (i > 0)
-    status = server_cmd_writer (server);
-
-  DEBUG_MSG ("Canceling server workers.");
-  
-  llist_cancel (&server->task_queue);
-  llist_cancel (&server->cmd_out);
-  for (--i ; i >= 0; --i)
-    pthread_join (ids[i], NULL);
-  
-  DEBUG_MSG ("Server workers canceled.");
-  
-  return (status);
+  return (NULL);
 }
 
 static void *
-data_retrieval (void * arg)
+server_cmd_reader (void * arg)
 {
   server_t * server = arg;
-  status_t status = ST_SUCCESS;
-  block_id_t block_id;
-  
-  DEBUG_MSG ("Data retrieval thread has started.");
-  
-  memset (&block_id, 0, sizeof (block_id));
-  block_id.size = MIN_BLOCK_SIZE * SPLIT_RATIO;
 
-  for (block_id.offset = 0;
-       block_id.offset < server->connection->context->size;
-       block_id.offset += block_id.size)
+  DEBUG_MSG ("Started server command reader.");
+  
+  for (;;)
     {
-      if (block_id.size > server->connection->context->size - block_id.offset)
-	block_id.size = server->connection->context->size - block_id.offset;
-      
-      status = send_block_request (server, &block_id);
+      msg_t msg;
+      status_t status = msg_recv (server->connection->cmd_fd, &msg);
+
       if (ST_SUCCESS != status)
 	break;
 
-      tip_wait_low (server, MAX_TIP * SPLIT_RATIO);
+      DUMP_VAR (msg_t, &msg);
+      
+      switch (msg.msg_type)
+	{
+	case MT_BLOCK_MATCHED:
+	  status = block_matched (server, &msg.block_matched);
+	  break;
+	case MT_BLOCK_SEND_ERROR:
+	  ERROR_MSG ("Client failed to send data block (offset %zd size %zd).",
+		     msg.block_id.offset, msg.block_id.size);
+	case MT_BLOCK_SENT:
+	  status = block_sent (server, &msg.block_id);
+	  break;
+	default:
+	  status = ST_FAILURE;
+	  break;
+	}
+      tip_dec (server);
+      
+      if (ST_SUCCESS != status)
+	break;
     }
 
-  tip_wait_low (server, 0);
-  if (ST_SUCCESS == status)
-    send_terminate (server);
+  server_cancel (server);
   
-  DEBUG_MSG ("Exiting data retrieval thread.");
+  DEBUG_MSG ("Exiting server command reader thread.");
   
   return (NULL);
 }
 
 static status_t
-start_data_retrieval (server_t * server)
-{
-  pthread_t id;
-  status_t status;
-  int rv = pthread_create (&id, NULL, data_retrieval, server);
-  if (rv != 0)
-    {
-      ERROR_MSG ("Failed to start data retrieval thread.");
-      return (ST_FAILURE);
-    }
-  
-  DEBUG_MSG ("Start data retrieval. Thread created %d.", rv);
-
-  status = server_cmd_writer (server);
-
-  DEBUG_MSG ("Canceling data retrieval thread.");
-
-  llist_cancel (&server->cmd_out);
-  tip_cancel (server);
-  pthread_join (id, NULL);
-  
-  DEBUG_MSG ("Data retrieval thread canceled.");
-  
-  return (status);
-}
-
-static void *
 task_producer (void * arg)
 {
   server_t * server = arg;
@@ -590,63 +499,59 @@ task_producer (void * arg)
   
   DEBUG_MSG ("Exiting data retrieval thread.");
   
-  return (NULL);
+  return (status);
 }
 
 static status_t
-start_task_producer (server_t * server)
+data_retrieval (server_t * server)
 {
-  pthread_t id;
-  int rv = pthread_create (&id, NULL, task_producer, server);
-  if (rv != 0)
+  status_t status = ST_SUCCESS;
+  block_id_t block_id;
+  
+  DEBUG_MSG ("Data retrieval thread has started.");
+  
+  memset (&block_id, 0, sizeof (block_id));
+  block_id.size = MIN_BLOCK_SIZE * SPLIT_RATIO;
+
+  for (block_id.offset = 0;
+       block_id.offset < server->connection->context->size;
+       block_id.offset += block_id.size)
     {
-      ERROR_MSG ("Failed to start tasks producer thread.");
-      return (ST_FAILURE);
+      if (block_id.size > server->connection->context->size - block_id.offset)
+	block_id.size = server->connection->context->size - block_id.offset;
+      
+      status = send_block_request (server, &block_id);
+      if (ST_SUCCESS != status)
+	break;
+
+      tip_wait_low (server, MAX_TIP * SPLIT_RATIO);
     }
 
-  status_t status = start_workers (server);
-
-  DEBUG_MSG ("Canceling tasks producer thread.");
+  tip_wait_low (server, 0);
+  if (ST_SUCCESS == status)
+    send_terminate (server);
   
-  llist_cancel (&server->task_queue);
-  tip_cancel (server);
-  pthread_join (id, NULL);
-  
-  DEBUG_MSG ("Tasks producer thread canceled.");
+  DEBUG_MSG ("Exiting data retrieval thread.");
   
   return (status);
 }
 
 static status_t
-start_cmd_reader (server_t * server)
+start_file_sync (void * arg)
 {
-  pthread_t id;
-  status_t status;
-  int rv = pthread_create (&id, NULL, server_cmd_reader, server);
-  
-  if (rv != 0)
-    {
-      ERROR_MSG ("Failed to start command reader thread.");
-      return (ST_FAILURE);
-    }
-  
-  DEBUG_MSG ("Satart command reader. Thread create returned %d.", rv);
-  DEBUG_MSG ("File on server status %d.", server->connection->context->file_exists);
-  
+  server_t * server = arg;
+  status_t status = ST_SUCCESS;
   if (!server->connection->context->file_exists)
-    status = start_data_retrieval (server);
+    status = data_retrieval (server);
   else
-    status = start_task_producer (server);
-
-  DEBUG_MSG ("Canceling command reader thread.");
-
-  llist_cancel (&server->cmd_out);
-  llist_cancel (&server->task_queue);
-  pthread_join (id, NULL);
-  
-  DEBUG_MSG ("Command reader thread canceled.");
-  
+    status = start_threads (server_worker, server->connection->context->config->workers_number, task_producer, server);
   return (status);
+}
+
+static status_t
+start_cmd_writer (void * server)
+{
+  return (start_threads (server_cmd_writer, 1, start_file_sync, server));
 }
 
 static void *
@@ -687,7 +592,6 @@ handle_client (void * arg)
   LLIST_INIT (&server.cmd_out, msg_t, -1);
 
   DEBUG_MSG ("Context for new client inited. Read file meta from client.");
-  
 
   status_t status = read_file_meta (&connection); /* reads UDP port of remote into connection_t and opens file for write */
 
@@ -698,7 +602,7 @@ handle_client (void * arg)
       DEBUG_MSG ("Added client context to registry. Return value %d.", status);
       
       if (ST_SUCCESS == status)
-	status = start_cmd_reader (&server);
+	status = start_threads (server_cmd_reader, 1, start_cmd_writer, &server);
 
       sync_storage_del (&server.server_ctx->clients, &server);
       mmap_mng_free (&context.mmap_mng);
@@ -798,9 +702,11 @@ run_accepter (server_ctx_t * server_ctx)
 }
 
 static status_t
-create_server_socket (server_ctx_t * server_ctx)
+create_server_socket (void * arg)
 {
+  server_ctx_t * server_ctx = arg;
   status_t status;
+  
   server_ctx->server_sock = socket (PF_INET, SOCK_STREAM, IPPROTO_TCP);
   
   DEBUG_MSG ("Created command socket %d.", server_ctx->server_sock);
@@ -829,8 +735,8 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
   typeof (server->connection->context->config->compress_level) * compress_level = (void*)&buf[sizeof (*block_id)];
   int size = buf_size - sizeof (*block_id) - sizeof (*compress_level);
   unsigned char * src = &buf[sizeof (*block_id) + sizeof (*compress_level)];
-  mr_ptr_t * find = sync_storage_find (&server->data_blocks, block_id);
-  if (find == NULL) /* got second duplicate */
+  /* unregister block in registry */
+  if (ST_SUCCESS != sync_storage_del (&server->data_blocks, block_id)) /* got second duplicate */
     return (ST_SUCCESS);
   
   DEBUG_MSG ("Write block at offset 0x%zx size %zd.", block_id->offset, block_id->size);
@@ -843,8 +749,6 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
 
   /* set compress level into clients properties */
   server->compress_level = *compress_level;
-  /* unregister block in registry */
-  sync_storage_del (&server->data_blocks, block_id);
 
   /* get address for block and release temporary lock */
   unsigned char * dst = mmap_mng_get_addr (server->connection->context, block_id);
@@ -943,40 +847,6 @@ server_data_reader (void * arg)
   return (NULL);
 }
 
-static status_t
-start_data_readers (server_ctx_t * server_ctx)
-{
-  int i;
-  pthread_t ids[server_ctx->config->workers_number];
-  status_t status = ST_FAILURE;
-
-  DEBUG_MSG ("Starting %d data readers.", server_ctx->config->workers_number);
-  
-  for (i = 0; i < server_ctx->config->workers_number; ++i)
-    {
-      int rv = pthread_create (&ids[i], NULL, server_data_reader, server_ctx);
-      if (rv != 0)
-	break;
-    }
-
-  DEBUG_MSG ("Started %d data readers.", i);
-  
-  if (i > 0)
-    status = create_server_socket (server_ctx);
-
-  DEBUG_MSG ("Canceling and joining data readers.");
-  
-  for (--i ; i >= 0; --i)
-    {
-      pthread_cancel (ids[i]);
-      pthread_join (ids[i], NULL);
-    }
-  
-  DEBUG_MSG ("Exiting data readers starter.");
-  
-  return (status);
-}
-
 status_t
 run_server (config_t * config)
 {
@@ -1013,7 +883,7 @@ run_server (config_t * config)
   DEBUG_MSG ("Binded data socket. Return value: %d.", rv);
   
   if (0 == rv)
-    status = start_data_readers (&server_ctx);
+    status = start_threads (server_data_reader, config->workers_number, create_server_socket, &server_ctx);
   else
     ERROR_MSG ("bind failed errno(%d) '%s'.", errno, strerror (errno));
   

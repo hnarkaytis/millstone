@@ -94,4 +94,6 @@ TYPEDEF_STRUCT (connection_t,
 #define DUMP_VAR _OFF_MSG
 #endif
 
+extern status_t start_threads (void * (* handler) (void *), int count, status_t (*nested_handler) (void *), void * arg);
+
 #endif /* _MILLSTONE_H_ */

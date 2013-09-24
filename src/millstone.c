@@ -20,6 +20,37 @@
 
 #define DEFAULT_MEM_THRESHOLD (5)
 
+status_t
+start_threads (void * (* handler) (void *), int count, status_t (*nested_handler) (void *), void * arg)
+{
+  int i;
+  pthread_t ids[count];
+  status_t status = ST_FAILURE;
+
+  DEBUG_MSG ("Start server workers %d.", count);
+  
+  for (i = 0; i < count; ++i)
+    {
+      int rv = pthread_create (&ids[i], NULL, handler, arg);
+      if (rv != 0)
+	break;
+    }
+
+  DEBUG_MSG ("Started %d.", i);
+  
+  if (i > 0)
+    status = nested_handler (arg);
+
+  DEBUG_MSG ("Canceling workers.");
+
+  for (--i ; i >= 0; --i)
+    pthread_join (ids[i], NULL);
+  
+  DEBUG_MSG ("Workers canceled.");
+  
+  return (status);
+}  
+
 void
 cpu_id (unsigned i, unsigned regs[4])
 {

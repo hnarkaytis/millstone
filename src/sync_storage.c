@@ -50,13 +50,15 @@ sync_storage_del (sync_storage_t * sync_storage, mr_ptr_t mr_ptr)
 }
 
 mr_ptr_t *
-sync_storage_find (sync_storage_t * sync_storage, mr_ptr_t mr_ptr)
+sync_storage_find (sync_storage_t * sync_storage, mr_ptr_t mr_ptr, mr_compar_fn_t found_fn)
 {
   sync_rb_tree_t * bucket = get_backet (sync_storage, mr_ptr);
   pthread_mutex_lock (&bucket->mutex);
-  mr_ptr_t * find = mr_tfind (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
+  mr_ptr_t * found = mr_tfind (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
+  if ((found != NULL) && (found_fn != NULL))
+    found_fn (*found, mr_ptr, sync_storage->context);
   pthread_mutex_unlock (&bucket->mutex);
-  return (find);
+  return (found);
 }
 
 void

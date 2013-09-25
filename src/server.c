@@ -17,6 +17,7 @@
 #include <unistd.h> /* TEMP_FAILURE_RETRY, close, ftruncate64 */
 #include <string.h> /* memcpy, strerror */
 #include <errno.h> /* errno */
+#include <limits.h> /* CHAR_BIT */
 #include <sys/mman.h> /* mmap64, unmap */
 #include <sys/socket.h> /* setsockopt */
 #include <netinet/tcp.h> /* TCP_NODELAY */
@@ -26,6 +27,8 @@
 #ifdef HAVE_ZLIB
 #include <zlib.h>
 #endif /* HAVE_ZLIB */
+
+#define MAX_RETRY (3)
 
 TYPEDEF_STRUCT (task_t,
 		(block_id_t, block_id),
@@ -66,7 +69,9 @@ block_id_compar (const mr_ptr_t x, const mr_ptr_t y, const void * null)
 {
   block_id_t * x_ = x.ptr;
   block_id_t * y_ = y.ptr;
-  int cmp = (x_->offset > y_->offset) - (x_->offset < y_->offset);
+  typeof (x_->offset) x_offset = x_->offset & ~((((typeof (x_->offset))1) << (CHAR_BIT * sizeof (x_->count))) - 1);
+  typeof (y_->offset) y_offset = y_->offset & ~((((typeof (y_->offset))1) << (CHAR_BIT * sizeof (y_->count))) - 1);
+  int cmp = (x_offset > y_offset) - (x_offset < y_offset);
   if (cmp)
     return (cmp);
   cmp = (x_->size > y_->size) - (x_->size < y_->size);
@@ -77,6 +82,7 @@ mr_hash_value_t
 block_id_hash (const mr_ptr_t x, const void * null)
 {
   block_id_t * x_ = x.ptr;
+  MR_COMPILETIME_ASSERT (MIN_TRANSFER_BLOCK_SIZE < (1 << (CHAR_BIT * sizeof (x_->count))));
   return (x_->offset / MIN_TRANSFER_BLOCK_SIZE);
 }
 
@@ -86,7 +92,7 @@ block_id_free (const mr_ptr_t x, const void * null)
   MR_FREE (x.ptr);
 }
 
-status_t
+static status_t
 block_id_register (sync_storage_t * sync_storage, block_id_t * block_id)
 {
   block_id_t * alloc_block_id = MR_MALLOC (sizeof (*alloc_block_id));
@@ -233,7 +239,7 @@ copy_duplicate (server_t * server, block_matched_t * block_matched)
 				server->connection->context->file_fd,
 				block_matched->duplicate_block_id.offset);
   
-  DEBUG_MSG ("Got message that block %zd:%zd is duplicated of block %zd:%zd.",
+  DEBUG_MSG ("Got message that block 0x%zx:%x is duplicated of block 0x%zx:%x.",
 	     block_matched->block_id.offset, block_matched->block_id.size,
 	     block_matched->duplicate_block_id.offset, block_matched->duplicate_block_id.size);
   
@@ -291,46 +297,82 @@ block_matched (server_t * server, block_matched_t * block_matched)
 }
 
 static status_t
+retry_splitted_block (server_t * server, block_id_t * block_id)
+{
+  status_t status = ST_SUCCESS;
+#ifdef HAVE_ZLIB
+  if (server->compress_level > 0)
+    {
+      /* we need to split lost packets approximetly half-and-half */
+      size_t size = block_id->size;
+      int size_width = mtu_tune_get_width (size);
+      /* standard packets will have size of 2^N and
+	 will be splitted in two equal parts.
+	 Last block of file might have arbitrary size. */
+      if (size - (1 << (size_width - 1)) <= (1 << size_width))
+	--size_width;
+      /* do not split on blocks less then minimal size */
+      if (size_width < MIN_TRANSFER_BLOCK_SIZE_BITS)
+	size_width = MIN_TRANSFER_BLOCK_SIZE_BITS;
+      block_id->size = 1 << size_width;
+      /* send request for the first part */
+      status = send_block_request (server, block_id);
+      /* send request for the rest */
+      if ((ST_SUCCESS == status) && (size > (1 << size_width)))
+	{
+	  block_id->offset += 1 << size_width;
+	  block_id->size = size - (1 << size_width);
+	  status = send_block_request (server, block_id);
+	}
+    }
+  else
+#endif /* HAVE_ZLIB */
+    status = send_block_request (server, block_id);
+  return (status);
+}  
+
+static int
+track_block_retry (const mr_ptr_t tracked, const mr_ptr_t orig, const void * context)
+{
+  block_id_t * tracked_block_id = tracked.ptr;
+  block_id_t * orig_block_id = orig.ptr;
+  orig_block_id->count = ++tracked_block_id->count;
+  return (orig_block_id->count);
+}
+
+static status_t
 block_sent (server_t * server, block_id_t * block_id)
 {
   status_t status = ST_SUCCESS;
-  bool failure = (ST_SUCCESS == sync_storage_del (&server->data_blocks, block_id));
-  
-  DEBUG_MSG ("Got confirmation for block %zd:%zd.", block_id->offset, block_id->size);
-  
+  mr_ptr_t * find = sync_storage_find (&server->data_blocks, block_id, track_block_retry);
+  bool failure = (find != NULL);
+  bool need_retry = (block_id->count < MAX_RETRY);
+
+  DEBUG_MSG ("Got confirmation for block 0x%zx:%x.", block_id->offset, block_id->size);
+
+  block_id->count = 0;
+  if (failure)
+    {
+      if (!need_retry)
+	failure = (ST_SUCCESS == sync_storage_del (&server->data_blocks, block_id));
+    }
+    
   mtu_tune_log (&server->mtu_tune, block_id->size, failure);
+  
   if (failure)
     {
       DEBUG_MSG ("Packet lost for offset 0x%zx.", block_id->offset);
       
-#ifdef HAVE_ZLIB
-      if (server->compress_level > 0)
-	{
-	  /* we need to split lost packets approximetly half-and-half */
-	  size_t size = block_id->size;
-	  int size_width = mtu_tune_get_width (size);
-	  /* standard packets will have size of 2^N and
-	     will be splitted in two equal parts.
-	     Last block of file might have arbitrary size. */
-	  if (size - (1 << (size_width - 1)) <= (1 << size_width))
-	    --size_width;
-	  /* do not split on blocks less then minimal size */
-	  if (size_width < MIN_TRANSFER_BLOCK_SIZE_BITS)
-	    size_width = MIN_TRANSFER_BLOCK_SIZE_BITS;
-	  block_id->size = 1 << size_width;
-	  /* send request for the first part */
-	  status = send_block_request (server, block_id);
-	  /* send request for the rest */
-	  if ((ST_SUCCESS == status) && (size > (1 << size_width)))
-	    {
-	      block_id->offset += 1 << size_width;
-	      block_id->size = size - (1 << size_width);
-	      status = send_block_request (server, block_id);
-	    }
-	}
+      if (!need_retry)
+	status = retry_splitted_block (server, block_id);
       else
-#endif /* HAVE_ZLIB */
-	status = send_block_request (server, block_id);
+	{
+	  msg_t msg;
+	  memset (&msg, 0, sizeof (msg));
+	  msg.msg_type = MT_BLOCK_REQUEST;
+	  msg.block_id = *block_id;
+	  status = msg_push (server, &msg);
+	}
     }
   return (status);
 }
@@ -352,7 +394,7 @@ server_worker (void * arg)
       if (ST_SUCCESS != status)
 	break;
       
-      DEBUG_MSG ("Server worker got task: offset:size %zd:%zd split on %zd.",
+      DEBUG_MSG ("Server worker got task: offset:size 0x%zx:%x split on 0x%zx.",
 		 task.block_id.offset, task.block_id.size, task.size);
       
       msg.msg_type = MT_BLOCK_DIGEST;
@@ -363,7 +405,7 @@ server_worker (void * arg)
 	  if (msg.block_id.size > task.block_id.size - offset)
 	    msg.block_id.size = task.block_id.size - offset;
 
-	  DEBUG_MSG ("Calc digest for offset %zd status %d.", msg.block_id.offset, status);
+	  DEBUG_MSG ("Calc digest for offset 0x%zx status %d.", msg.block_id.offset, status);
 	  
 	  unsigned char * data = mmap_mng_get_addr (server->connection->context, &msg.block_digest.block_id);
 	  if (NULL == data)
@@ -372,13 +414,13 @@ server_worker (void * arg)
 	  SHA1 (data, msg.block_digest.block_id.size, (unsigned char*)&msg.block_digest.digest);
 	  mmap_mng_unref (&server->connection->context->mmap_mng, &msg.block_digest.block_id);
 
-	  DEBUG_MSG ("Pushing to outgoing queue digest for offset %zd.", msg.block_id.offset);
+	  DEBUG_MSG ("Pushing to outgoing queue digest for offset 0x%zx.", msg.block_id.offset);
 	  
 	  status = msg_push (server, &msg);
 	  if (ST_SUCCESS != status)
 	    break;
 	  
-	  DEBUG_MSG ("Pushed digest for offset %zd.", msg.block_id.offset);
+	  DEBUG_MSG ("Pushed digest for offset 0x%zx.", msg.block_id.offset);
 	}
       
       tip_dec (server);
@@ -444,7 +486,7 @@ server_cmd_reader (void * arg)
 	  status = block_matched (server, &msg.block_matched);
 	  break;
 	case MT_BLOCK_SEND_ERROR:
-	  ERROR_MSG ("Client failed to send data block (offset %zd size %zd).",
+	  ERROR_MSG ("Client failed to send data block (offset 0x%zd:%x).",
 		     msg.block_id.offset, msg.block_id.size);
 	case MT_BLOCK_SENT:
 	  status = block_sent (server, &msg.block_id);
@@ -739,7 +781,7 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
   if (ST_SUCCESS != sync_storage_del (&server->data_blocks, block_id)) /* got second duplicate */
     return (ST_SUCCESS);
   
-  DEBUG_MSG ("Write block at offset 0x%zx size %zd.", block_id->offset, block_id->size);
+  DEBUG_MSG ("Write block at offset 0x%zx:%zx.", block_id->offset, block_id->size);
 
   if (size < 0)
     {
@@ -833,7 +875,7 @@ server_data_reader (void * arg)
 	  continue;
 	}
       connection.remote = addr.addr_in;
-      mr_ptr_t * find = sync_storage_find (&server_ctx->clients, &server);
+      mr_ptr_t * find = sync_storage_find (&server_ctx->clients, &server, NULL);
       if (NULL == find)
 	{
 	  DEBUG_MSG ("Unknown or disconnected client.");

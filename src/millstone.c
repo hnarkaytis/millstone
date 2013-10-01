@@ -1,15 +1,18 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif /* HAVE_CONFIG_H */
-#include <millstone.h>
 #include <logging.h>
 #include <client.h>
 #include <server.h>
+#include <connection.h>
+#include <millstone.h>
 
 #include <unistd.h> /* sysconf */
 #include <stdlib.h> /* EXIT_*, strtol */
 #include <string.h> /* memset, strchr */
 #include <getopt.h> /* getopt_long */
+
+#include <pthread.h>
 
 #ifdef HAVE_ZLIB
 #include <zlib.h>

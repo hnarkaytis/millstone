@@ -4,7 +4,8 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif /* HAVE_CONFIG_H */
-#include <millstone.h> /* status_t, connection_t  */
+#include <millstone.h> /* status_t  */
+#include <connection.h> /* connection_t  */
 
 extern status_t read_file_meta (connection_t * connection);
 extern status_t send_file_meta (connection_t * connection);

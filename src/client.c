@@ -7,7 +7,6 @@
 #include <msg.h>
 #include <llist.h>
 #include <file_meta.h>
-#include <mmap_mng.h>
 #include <client.h>
 
 #include <stddef.h> /* size_t, ssize_t */
@@ -65,7 +64,7 @@ static status_t
 send_block (client_t * client, block_id_t * block_id)
 {
   status_t status = ST_SUCCESS;
-  unsigned char * block_data = mmap_mng_get_addr (client->connection->context, block_id);
+  unsigned char * block_data = file_chunks_get_addr (client->connection->file, block_id->offset);
 
   DUMP_VAR (block_id_t, block_id);
 
@@ -75,11 +74,10 @@ send_block (client_t * client, block_id_t * block_id)
 #ifdef HAVE_ZLIB
   Byte buffer[block_id->size << 1];
   uLongf length = sizeof (buffer);
-  if (client->connection->context->config->compress_level > 0)
+  if (client->connection->file->config->compress_level > 0)
     {
       int z_status = compress2 (buffer, &length, block_data, block_id->size,
-				client->connection->context->config->compress_level);
-      mmap_mng_unref (&client->connection->context->mmap_mng, block_id);
+				client->connection->file->config->compress_level);
       
       if (Z_OK != z_status)
 	status = ST_FAILURE;
@@ -90,13 +88,13 @@ send_block (client_t * client, block_id_t * block_id)
     {
       struct iovec iov[] = {
 	{ .iov_len = sizeof (*block_id), .iov_base = block_id, },
-	{ .iov_len = sizeof (client->connection->context->config->compress_level),
-	  .iov_base = &client->connection->context->config->compress_level, },
+	{ .iov_len = sizeof (client->connection->file->config->compress_level),
+	  .iov_base = &client->connection->file->config->compress_level, },
 	{ .iov_len = block_id->size, .iov_base = block_data, },
       };
 
 #ifdef HAVE_ZLIB
-      if (client->connection->context->config->compress_level > 0)
+      if (client->connection->file->config->compress_level > 0)
 	{
 	  iov[2].iov_len = length;
 	  iov[2].iov_base = buffer;
@@ -110,11 +108,6 @@ send_block (client_t * client, block_id_t * block_id)
 	rv = writev (client->connection->data_fd, iov, sizeof (iov) / sizeof (iov[0]));
       } while ((-1 == rv) && ((EPERM == errno) || (EINTR == errno) || (ENOBUFS == errno)));
 
-#ifdef HAVE_ZLIB
-      if (client->connection->context->config->compress_level <= 0)
-	mmap_mng_unref (&client->connection->context->mmap_mng, block_id);
-#endif /* HAVE_ZLIB */
-      
       for (i = 0; i < sizeof (iov) / sizeof (iov[0]); ++i)
 	len += iov[i].iov_len;
 
@@ -125,6 +118,9 @@ send_block (client_t * client, block_id_t * block_id)
 	  ERROR_MSG ("Failed to send data block (sent %d bytes, but expexted %d bytes). Error (%d) '%s'", rv, len, errno, strerror (errno));
 	  status = ST_FAILURE;
 	}
+      
+      if (ST_SUCCESS == status)
+	status = chunk_unref (client->connection->file, block_id->offset);
     }
   
   return (status);
@@ -284,12 +280,14 @@ digest_calculator (void * arg)
       DUMP_VAR (msg_t, &msg);
       
       block_digest.block_id = msg.block_digest.block_id;
-      unsigned char * block_data = mmap_mng_get_addr (client->connection->context, &block_digest.block_id);
+      unsigned char * block_data = file_chunks_get_addr (client->connection->file, block_digest.block_id.offset);
       if (NULL == block_data)
 	break;
       
       SHA1 (block_data, block_digest.block_id.size, (unsigned char*)&block_digest.digest);
-      mmap_mng_unref (&client->connection->context->mmap_mng, &block_digest.block_id);
+
+      if (ST_SUCCESS != chunk_unref (client->connection->file, block_digest.block_id.offset))
+	break;
 
       msg.msg_type = MT_BLOCK_MATCHED;
       msg.block_matched.matched = !memcmp (block_digest.digest, msg.block_digest.digest, sizeof (block_digest.digest));
@@ -304,7 +302,7 @@ digest_calculator (void * arg)
       else
 	{
 	  block_id_t * matched_block_id = dedup_check (&client->dedup, &block_digest);
-	  if (matched_block_id != NULL)
+	  if ((matched_block_id != NULL) && (matched_block_id->size == block_digest.block_id.size))
 	    {
 	      msg.block_matched.duplicate = TRUE;
 	      msg.block_matched.duplicate_block_id = *matched_block_id;
@@ -351,20 +349,25 @@ client_cmd_reader (void * arg)
       
       DUMP_VAR (msg_t, &msg);
       
-      if (MT_TERMINATE == msg.msg_type)
-	{
-	  DEBUG_MSG ("Got termination command.");
-	  break;
-	}
-      
       switch (msg.msg_type)
 	{
+	case MT_BLOCK_MAP:
+	  if (NULL == chunk_ref (client->connection->file, msg.block_id.offset))
+	    status = ST_FAILURE;
+	  break;
+
+	case MT_BLOCK_UNMAP:
+	  status = chunk_unref (client->connection->file, msg.block_id.offset);
+	  break;
+	  
 	case MT_BLOCK_DIGEST:
 	  status = llist_push (&client->cmd_in, &msg);
 	  break;
+	  
 	case MT_BLOCK_REQUEST:
 	  status = llist_push (&client->data_in, &msg);
 	  break;
+	  
 	default:
 	  ERROR_MSG ("Unexpected message type %d.", msg.msg_type);
 	  status = ST_FAILURE;
@@ -393,7 +396,7 @@ static status_t
 start_data_writers (void * arg)
 {
   client_t * client = arg;
-  return (start_threads (client_data_writer, client->connection->context->config->workers_number, start_cmd_writer, client));
+  return (start_threads (client_data_writer, client->connection->file->config->workers_number, start_cmd_writer, client));
 }
 
 static status_t
@@ -414,13 +417,13 @@ run_session (connection_t * connection)
   LLIST_INIT (&client.cmd_in, msg_t, -1);
   LLIST_INIT (&client.data_in, msg_t, -1);
 
-  status = dedup_init (&client.dedup, connection->context->config->mem_threshold);
+  status = dedup_init (&client.dedup, connection->file->config->mem_threshold);
   if (ST_SUCCESS != status)
     return (status);
   
   DEBUG_MSG ("Session inited with.");
   
-  status = start_threads (digest_calculator, connection->context->config->workers_number, start_data_writers, &client);
+  status = start_threads (digest_calculator, connection->file->config->workers_number, start_data_writers, &client);
 
   dedup_free (&client.dedup);
 
@@ -480,14 +483,14 @@ create_data_socket (connection_t * connection)
 static status_t
 connect_to_server (connection_t * connection)
 {
-  struct hostent * hostinfo = gethostbyname (connection->context->config->dst_host);
+  struct hostent * hostinfo = gethostbyname (connection->file->config->dst_host);
   if (hostinfo != NULL)
     connection->remote.sin_addr.s_addr = *((in_addr_t*) hostinfo->h_addr);
   else
     connection->remote.sin_addr.s_addr = htonl (INADDR_ANY);
 
   connection->remote.sin_family = AF_INET;
-  connection->remote.sin_port = htons (connection->context->config->dst_port);
+  connection->remote.sin_port = htons (connection->file->config->dst_port);
 
   DEBUG_MSG ("Connect to %08x:%04x.", connection->remote.sin_addr.s_addr, connection->remote.sin_port);
 
@@ -513,12 +516,12 @@ connect_to_server (connection_t * connection)
 }
 
 static status_t
-create_server_socket (context_t * context)
+create_client_socket (file_t * file)
 {
   connection_t connection;
 
   memset (&connection, 0, sizeof (connection));
-  connection.context = context;
+  connection.file = file;
 
   connection.cmd_fd = socket (PF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (connection.cmd_fd < 0)
@@ -530,6 +533,7 @@ create_server_socket (context_t * context)
   DEBUG_MSG ("Created command socket.");
   
   status_t status = connect_to_server (&connection);
+  
   close (connection.cmd_fd);
 
   DEBUG_MSG ("Close command socket.");
@@ -541,28 +545,27 @@ status_t
 run_client (config_t * config)
 {
   status_t status = ST_FAILURE;
-  context_t context;
+  file_t file;
 
-  memset (&context, 0, sizeof (context));
-  context.config = config;
-  context.file_fd = open64 (config->src_file, O_RDONLY);
-  if (context.file_fd <= 0)
+  memset (&file, 0, sizeof (file));
+  file.config = config;
+  file.fd = open64 (config->src_file, O_RDONLY);
+  if (file.fd <= 0)
     {
       FATAL_MSG ("Can't open source file '%s'.", config->src_file);
       return (ST_FAILURE);
     }
 
-  DUMP_VAR (context_t, &context);
+  DUMP_VAR (file_t, &file);
   
-  context.size = lseek64 (context.file_fd, 0, SEEK_END);
+  file.size = lseek64 (file.fd, 0, SEEK_END);
 
-  mmap_mng_init (&context.mmap_mng, PROT_READ, MAP_PRIVATE);
-
-  status = create_server_socket (&context);
-
-  mmap_mng_free (&context.mmap_mng);
+  file_chunks_init (&file, PROT_READ, MAP_PRIVATE);
   
-  close (context.file_fd);
+  status = create_client_socket (&file);
+
+  file_chunks_cancel (&file);
+  close (file.fd);
 
   DEBUG_MSG ("Exiting client.");
   

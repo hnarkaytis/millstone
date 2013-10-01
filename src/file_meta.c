@@ -19,8 +19,8 @@ read_file_meta (connection_t * connection)
 {
   ssize_t len, rv;
   
-  len = sizeof (connection->context->size);
-  rv = TEMP_FAILURE_RETRY (read (connection->cmd_fd, &connection->context->size, len));
+  len = sizeof (connection->file->size);
+  rv = TEMP_FAILURE_RETRY (read (connection->cmd_fd, &connection->file->size, len));
   if (rv != len)
     {
       ERROR_MSG ("Failed to read file size from client.");
@@ -53,11 +53,11 @@ read_file_meta (connection_t * connection)
   } while (dst_file[count++] != 0);
 
   DEBUG_MSG ("Got from client: port %04x size:%zd filename '%s'.",
-	     connection->remote.sin_port, connection->context->size, dst_file);
+	     connection->remote.sin_port, connection->file->size, dst_file);
   
   rv = access (dst_file, F_OK);
-  connection->context->file_exists = (0 == rv);
-  if (connection->context->file_exists)
+  connection->file->file_exists = (0 == rv);
+  if (connection->file->file_exists)
     {
       rv = access (dst_file, R_OK | W_OK);
       if (rv != 0)
@@ -67,18 +67,18 @@ read_file_meta (connection_t * connection)
 	}
     }
   
-  connection->context->file_fd = open64 (dst_file, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-  if (connection->context->file_fd <= 0)
+  connection->file->fd = open64 (dst_file, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+  if (connection->file->fd <= 0)
     {
       ERROR_MSG ("Can't open/create destination file '%s.'", dst_file);
       return (ST_FAILURE);
     }
 
-  rv = ftruncate64 (connection->context->file_fd, connection->context->size);
+  rv = ftruncate64 (connection->file->fd, connection->file->size);
   if (rv != 0)
     {
-      ERROR_MSG ("Failed to set new size (%d) to the file '%s'.", connection->context->size, dst_file);
-      close (connection->context->file_fd);
+      ERROR_MSG ("Failed to set new size (%d) to the file '%s'.", connection->file->size, dst_file);
+      close (connection->file->fd);
       return (ST_FAILURE);
     }
 
@@ -89,9 +89,9 @@ status_t
 send_file_meta (connection_t * connection)
 {
   const struct iovec iov[] = {
-    { .iov_len = sizeof (connection->context->size), .iov_base = &connection->context->size, },
+    { .iov_len = sizeof (connection->file->size), .iov_base = &connection->file->size, },
     { .iov_len = sizeof (connection->local.sin_port), .iov_base = &connection->local.sin_port, },
-    { .iov_len = strlen (connection->context->config->dst_file) + 1, .iov_base = connection->context->config->dst_file, },
+    { .iov_len = strlen (connection->file->config->dst_file) + 1, .iov_base = connection->file->config->dst_file, },
   };
 
   ssize_t rv = TEMP_FAILURE_RETRY (writev (connection->cmd_fd, iov, sizeof (iov) / sizeof (iov[0])));

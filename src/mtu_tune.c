@@ -4,6 +4,7 @@
 #include <millstone.h>
 #include <logging.h>
 #include <block.h>
+#include <connection.h>
 #include <mtu_tune.h>
 
 #include <stddef.h> /* size_t, ssize_t */
@@ -65,7 +66,7 @@ void
 mtu_tune_init (mtu_tune_t * mtu_tune)
 {
   memset (mtu_tune, 0, sizeof (*mtu_tune));
-  mtu_tune->current_mtu = mtu_tune_get_width (MAX_TRANSFER_BLOCK_SIZE);
+  mtu_tune->current_mtu = mtu_tune_get_width (EXPECTED_PACKET_SIZE);
   DUMP_VAR (mtu_tune_t, mtu_tune);
 }
 

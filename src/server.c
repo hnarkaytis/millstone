@@ -525,13 +525,6 @@ chunk_file (server_t * server, status_t (*block_handler) (server_t *, block_id_t
 }
 
 static status_t
-data_retrieval (server_t * server)
-{
-  file_set_chunk_size (server->connection->file, MAX_BLOCK_SIZE);
-  return (chunk_file (server, send_block_request));
-}
-
-static status_t
 push_task (server_t * server, block_id_t * block_id)
 {
   task_t task;
@@ -546,9 +539,7 @@ push_task (server_t * server, block_id_t * block_id)
 static status_t
 task_producer (void * arg)
 {
-  server_t * server = arg;
-  file_set_chunk_size (server->connection->file, MAX_BLOCK_SIZE);
-  return (chunk_file (server, push_task));
+  return (chunk_file (arg, push_task));
 }
 
 static status_t
@@ -557,7 +548,7 @@ start_file_sync (void * arg)
   server_t * server = arg;
   status_t status = ST_SUCCESS;
   if (!server->connection->file->file_exists)
-    status = data_retrieval (server);
+    status = chunk_file (server, send_block_request);
   else
     status = start_threads (server_worker, server->connection->file->config->workers_number, task_producer, server);
   shutdown (server->connection->cmd_fd, SD_BOTH); /* force shutdown of reader and writer */
@@ -591,7 +582,7 @@ handle_client (void * arg)
   file_t file;
   memset (&file, 0, sizeof (file));
   file.config = accepter_ctx.server_ctx->config;
-  file_chunks_init (&file, PROT_WRITE, MAP_SHARED);
+  file_chunks_init (&file, PROT_WRITE, MAP_SHARED, MAX_BLOCK_SIZE);
 
   connection_t connection;
   memset (&connection, 0, sizeof (connection));

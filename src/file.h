@@ -46,10 +46,9 @@ TYPEDEF_STRUCT (file_t,
 extern chunk_t * chunk_ref (file_t * file, off64_t offset);
 extern status_t chunk_unref (file_t * file, off64_t offset);
 extern void * file_chunks_get_addr (file_t * file, off64_t offset);
-extern void file_chunks_init (file_t * file, int protect, int flags);
+extern void file_chunks_init (file_t * file, int protect, int flags, size_t size);
 extern void file_chunks_cancel (file_t * file);
 extern void file_chunks_finilize (file_t * file);
 extern void file_chunks_set_release_handler (file_t * file, chunk_release_t chunk_release, void * context);
-extern void file_set_chunk_size (file_t * file, size_t size);
 
 #endif /* _FILE_H_ */

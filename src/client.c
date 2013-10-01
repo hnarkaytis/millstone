@@ -141,6 +141,7 @@ client_data_writer (void * arg)
 	break;
       
       DUMP_VAR (msg_t, &msg);
+      
       status = send_block (client, &msg.block_id);
       
       DEBUG_MSG ("Data block send status %d.", status);
@@ -560,7 +561,7 @@ run_client (config_t * config)
   
   file.size = lseek64 (file.fd, 0, SEEK_END);
 
-  file_chunks_init (&file, PROT_READ, MAP_PRIVATE);
+  file_chunks_init (&file, PROT_READ, MAP_PRIVATE, MAX_BLOCK_SIZE);
   
   status = create_client_socket (&file);
 

@@ -366,15 +366,7 @@ server_worker (void * arg)
 	  
 	  SHA1 (data, msg.block_digest.block_id.size, (unsigned char*)&msg.block_digest.digest);
 
-	  if (ST_SUCCESS != chunk_unref (server->connection->file, msg.block_digest.block_id.offset))
-	    break;
-
 	  DEBUG_MSG ("Pushing to outgoing queue digest for offset 0x%zx.", msg.block_id.offset);
-	  
-	  if (NULL == chunk_ref (server->connection->file, msg.block_id.offset))
-	    status = ST_FAILURE;
-	  if (ST_SUCCESS != status)
-	    break;
 	  
 	  status = llist_push (&server->cmd_out, &msg);
 	  if (ST_SUCCESS != status)

@@ -119,8 +119,8 @@ send_block (client_t * client, block_id_t * block_id)
 	  status = ST_FAILURE;
 	}
       
-      if (ST_SUCCESS == status)
-	status = chunk_unref (client->connection->file, block_id->offset);
+      if (ST_SUCCESS != chunk_unref (client->connection->file, block_id->offset))
+	status = ST_FAILURE;
     }
   
   return (status);
@@ -352,12 +352,12 @@ client_cmd_reader (void * arg)
       
       switch (msg.msg_type)
 	{
-	case MT_BLOCK_MAP:
+	case MT_BLOCK_REF:
 	  if (NULL == chunk_ref (client->connection->file, msg.block_id.offset))
 	    status = ST_FAILURE;
 	  break;
 
-	case MT_BLOCK_UNMAP:
+	case MT_BLOCK_UNREF:
 	  status = chunk_unref (client->connection->file, msg.block_id.offset);
 	  break;
 	  

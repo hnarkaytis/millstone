@@ -15,7 +15,7 @@ TYPEDEF_STRUCT (connection_t,
 
 #define DEFAULT_LISTEN_PORT (31415)
 
-#define EXPECTED_PACKET_SIZE (1500 - 72) /* IPv6, TCP timestamps - 72 bytes */
+#define EXPECTED_PACKET_SIZE (9000 - 72) /* Jumbo frames, IPv6, TCP timestamps - 72 bytes */
 
 #ifndef SD_BOTH
 #define SD_BOTH (2)

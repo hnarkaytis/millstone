@@ -236,8 +236,9 @@ block_matched (server_t * server, block_matched_t * block_matched)
 	}
     }
   
-  if (ST_SUCCESS == status)
-    status = chunk_unref (server->connection->file, block_matched->block_id.offset);
+  if (ST_SUCCESS != chunk_unref (server->connection->file, block_matched->block_id.offset))
+    status = ST_FAILURE;
+  
   return (status);
 }
 
@@ -323,8 +324,8 @@ block_sent (server_t * server, block_id_t * block_id)
 	}
     }
 
-  if (ST_SUCCESS == status)
-    status = chunk_unref (server->connection->file, block_id->offset);
+  if (ST_SUCCESS != chunk_unref (server->connection->file, block_id->offset))
+    status = ST_FAILURE;
   
   return (status);
 }
@@ -474,7 +475,7 @@ chunk_file (server_t * server, status_t (*block_handler) (server_t *, block_id_t
   DEBUG_MSG ("Start chunking file.");
 
   memset (&msg, 0, sizeof (msg));
-  msg.msg_type = MT_BLOCK_MAP;
+  msg.msg_type = MT_BLOCK_REF;
   
   for (;;)
     {
@@ -559,7 +560,7 @@ chunk_release (chunk_t * chunk, void * context)
   server_t * server = context;
   msg_t msg;
   memset (&msg, 0, sizeof (msg));
-  msg.msg_type = MT_BLOCK_UNMAP;
+  msg.msg_type = MT_BLOCK_UNREF;
   msg.block_id = chunk->block_id;
   llist_push (&server->cmd_out, &msg);
 }
@@ -581,10 +582,14 @@ handle_client (void * arg)
   connection.file = &file;
   connection.cmd_fd = accepter_ctx.fd;
   connection.remote.sin_addr = accepter_ctx.remote.sin_addr;
-  bool tcp_nodelay = TRUE;
-  setsockopt (connection.cmd_fd, SOL_TCP, TCP_NODELAY, &tcp_nodelay, sizeof (tcp_nodelay));
+  int tcp_nodelay = !0;
+  int rv = setsockopt (connection.cmd_fd, SOL_TCP, TCP_NODELAY, &tcp_nodelay, sizeof (tcp_nodelay));
+  if (rv != 0)
+    WARN_MSG ("Failed to turn off Nigel algorithm with errno %d - %s.", errno, strerror (errno));
   size_t buf_size = EXPECTED_PACKET_SIZE;
-  setsockopt (connection.cmd_fd, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof (buf_size));
+  rv = setsockopt (connection.cmd_fd, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof (buf_size));
+  if (rv != 0)
+    WARN_MSG ("Failed to set size of outgoing buffer with errno %d - %s.", errno, strerror (errno));
   
   server_t server;
   memset (&server, 0, sizeof (server));
@@ -598,7 +603,7 @@ handle_client (void * arg)
   mtu_tune_init (&server.mtu_tune);
   
   LLIST_INIT (&server.task_queue, task_t, -1);
-  LLIST_INIT (&server.cmd_out, msg_t, -1);
+  LLIST_INIT (&server.cmd_out, msg_t, 2 * EXPECTED_PACKET_SIZE / sizeof (msg_t));
 
   DEBUG_MSG ("Context for new client inited. Read file meta from client.");
 
@@ -642,10 +647,15 @@ run_accepter (server_ctx_t * server_ctx)
   struct linger linger_opt = { .l_onoff = 0, .l_linger = 0, };
 
   DEBUG_MSG ("Apply options on server command socket.");
-  setsockopt (server_ctx->server_sock, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof (reuse_addr));
-  setsockopt (server_ctx->server_sock, SOL_SOCKET, SO_LINGER, &linger_opt, sizeof (linger_opt));
+  
+  int rv = setsockopt (server_ctx->server_sock, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof (reuse_addr));
+  if (rv != 0)
+    WARN_MSG ("Failed to set reuse option for socket with errno %d - %s.", errno, strerror (errno));
+  rv = setsockopt (server_ctx->server_sock, SOL_SOCKET, SO_LINGER, &linger_opt, sizeof (linger_opt));
+  if (rv != 0)
+    WARN_MSG ("Failed set liner time for socket with errno %d - %s.", errno, strerror (errno));
 
-  int rv = bind (server_ctx->server_sock, (struct sockaddr *)&server_ctx->server_name, sizeof (server_ctx->server_name));
+  rv = bind (server_ctx->server_sock, (struct sockaddr *)&server_ctx->server_name, sizeof (server_ctx->server_name));
   
   DEBUG_MSG ("Binding server command socket. Return value %d.", rv);
   

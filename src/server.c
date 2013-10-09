@@ -80,8 +80,8 @@ mr_hash_value_t
 block_id_hash (const mr_ptr_t x, const void * null)
 {
   block_id_t * x_ = x.ptr;
-  MR_COMPILETIME_ASSERT (MIN_TRANSFER_BLOCK_SIZE < (1 << (CHAR_BIT * sizeof (x_->count))));
-  return (x_->offset / MIN_TRANSFER_BLOCK_SIZE);
+  MR_COMPILETIME_ASSERT (MIN_TRANSFER_BLOCK_SIZE_BITS < CHAR_BIT * sizeof (x_->count));
+  return (x_->offset >> MIN_TRANSFER_BLOCK_SIZE_BITS);
 }
 
 void

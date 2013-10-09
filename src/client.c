@@ -502,8 +502,10 @@ connect_to_server (connection_t * connection)
       return (ST_FAILURE);
     }
 
-  bool tcp_nodelay = TRUE;
-  setsockopt (connection->cmd_fd, SOL_TCP, TCP_NODELAY, &tcp_nodelay, sizeof (tcp_nodelay));
+  int tcp_nodelay = !0;
+  rv = setsockopt (connection->cmd_fd, SOL_TCP, TCP_NODELAY, &tcp_nodelay, sizeof (tcp_nodelay));
+  if (rv != 0)
+    WARN_MSG ("Failed to turn off Nigel algorithm with errno %d - %s.", errno, strerror (errno));
 
   DEBUG_MSG ("Connected to server successfully.");
   

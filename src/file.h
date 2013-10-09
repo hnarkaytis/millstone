@@ -18,7 +18,7 @@
 #include <inttypes.h> /* uint8_t */
 #include <stdbool.h> /* bool */
 
-#define MAX_MAPPED_MEMORY (1 << 30) /* 1Gb */
+#define MAX_MAPPED_MEMORY (1 << 28) /* 256Mb */
 
 TYPEDEF_STRUCT (chunk_t,
 		(block_id_t, block_id),

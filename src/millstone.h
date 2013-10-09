@@ -8,7 +8,7 @@
 #include <logging.h>
 
 #define SPLIT_RATIO (1 << 6)
-#define MIN_BLOCK_SIZE (PAGE_SIZE << 1)
+#define MIN_BLOCK_SIZE (PAGE_SIZE)
 #define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO * SPLIT_RATIO)
 
 TYPEDEF_ENUM (status_t, ST_SUCCESS, ST_FAILURE)

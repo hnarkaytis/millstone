@@ -14,10 +14,7 @@
 #include <metaresc.h>
 
 TYPEDEF_STRUCT (block_id_t, ATTRIBUTES (__attribute__ ((packed))),
-		ANON_UNION (tracked_block_offset, __attribute__ ((packed))),
 		(off64_t, offset),
-		(uint8_t, count),
-		END_ANON_UNION (),
 		(uint32_t, size),
 		)
 

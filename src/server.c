@@ -13,12 +13,17 @@
 #include <mtu_tune.h>
 #include <server.h>
 
+#ifndef __USE_GNU
+#define __USE_GNU
+#endif /* __USE_GNU */
 #include <stddef.h> /* size_t, ssize_t */
 #include <signal.h> /* signal, SIG_IGN, SIGPIPE */
 #include <unistd.h> /* TEMP_FAILURE_RETRY, close */
 #include <string.h> /* memcpy, strerror */
 #include <errno.h> /* errno */
 #include <limits.h> /* CHAR_BIT */
+#include <time.h> /* struct timespec */
+#include <sys/time.h> /* struct timeval */
 #include <sys/mman.h> /* mmap64, unmap */
 #include <sys/socket.h> /* setsockopt */
 #include <netinet/tcp.h> /* TCP_NODELAY */
@@ -29,7 +34,12 @@
 #include <zlib.h>
 #endif /* HAVE_ZLIB */
 
-#define MAX_RETRY (3)
+#define MILLION (1000000)
+
+TYPEDEF_STRUCT (timestamped_block_t,
+		(block_id_t, block_id),
+		(struct timeval, time),
+		)
 
 TYPEDEF_STRUCT (task_t,
 		(block_id_t, block_id),
@@ -52,6 +62,11 @@ TYPEDEF_STRUCT (server_t,
 		(sync_storage_t, data_blocks),
 		(mtu_tune_t, mtu_tune),
 		(server_ctx_t *, server_ctx),
+		(struct timeval, round_trip_time),
+		(llist_t, delayed_blocks),
+		(pthread_cond_t, delayed_blocks_cond),
+		(pthread_mutex_t, delayed_blocks_mutex),
+		(bool, cancel),
 		)
 
 TYPEDEF_STRUCT (accepter_ctx_t,
@@ -63,46 +78,46 @@ TYPEDEF_STRUCT (accepter_ctx_t,
 		)
 
 int
-block_id_compar (const mr_ptr_t x, const mr_ptr_t y, const void * null)
+timestamped_block_compar (const mr_ptr_t x, const mr_ptr_t y, const void * context)
 {
-  block_id_t * x_ = x.ptr;
-  block_id_t * y_ = y.ptr;
-  typeof (x_->offset) x_offset = x_->offset & ~((((typeof (x_->offset))1) << (CHAR_BIT * sizeof (x_->count))) - 1);
-  typeof (y_->offset) y_offset = y_->offset & ~((((typeof (y_->offset))1) << (CHAR_BIT * sizeof (y_->count))) - 1);
-  int cmp = (x_offset > y_offset) - (x_offset < y_offset);
+  timestamped_block_t * x_ = x.ptr;
+  timestamped_block_t * y_ = y.ptr;
+  int cmp = (x_->block_id.offset > y_->block_id.offset) -
+    (x_->block_id.offset < y_->block_id.offset);
   if (cmp)
     return (cmp);
-  cmp = (x_->size > y_->size) - (x_->size < y_->size);
+  cmp = (x_->block_id.size > y_->block_id.size) -
+    (x_->block_id.size < y_->block_id.size);
   return (cmp);
 }
 
 mr_hash_value_t
-block_id_hash (const mr_ptr_t x, const void * null)
+timestamped_block_hash (const mr_ptr_t x, const void * context)
 {
-  block_id_t * x_ = x.ptr;
-  MR_COMPILETIME_ASSERT (MIN_TRANSFER_BLOCK_SIZE_BITS < CHAR_BIT * sizeof (x_->count));
-  return (x_->offset >> MIN_TRANSFER_BLOCK_SIZE_BITS);
+  timestamped_block_t * x_ = x.ptr;
+  return (x_->block_id.offset >> MIN_TRANSFER_BLOCK_SIZE_BITS);
 }
 
 void
-block_id_free (const mr_ptr_t x, const void * null)
+timestamped_block_free (const mr_ptr_t x, const void * null)
 {
   MR_FREE (x.ptr);
 }
 
 static status_t
-block_id_register (sync_storage_t * sync_storage, block_id_t * block_id)
+timestamped_block_add (sync_storage_t * sync_storage, block_id_t * block_id)
 {
-  block_id_t * alloc_block_id = MR_MALLOC (sizeof (*alloc_block_id));
-  if (NULL == alloc_block_id)
+  timestamped_block_t * element = MR_MALLOC (sizeof (*element));
+  if (NULL == element)
     {
       FATAL_MSG ("Out of memory.");
       return (ST_FAILURE);
     }
-  *alloc_block_id = *block_id;
-  status_t status = sync_storage_add (sync_storage, alloc_block_id);
+  element->block_id = *block_id;
+  gettimeofday (&element->time, NULL);
+  status_t status = sync_storage_add (sync_storage, element);
   if (ST_SUCCESS != status)
-    MR_FREE (alloc_block_id);
+    MR_FREE (element);
   return (status);
 }
 
@@ -133,9 +148,12 @@ server_hash (const mr_ptr_t key, const void * context)
 static void
 server_cancel (server_t * server)
 {
+  server->cancel = TRUE;
   llist_cancel (&server->task_queue);
   llist_cancel (&server->cmd_out);
+  llist_cancel (&server->delayed_blocks);
   file_chunks_cancel (server->connection->file);
+  pthread_cond_broadcast (&server->delayed_blocks_cond);
 }
 
 static status_t
@@ -154,7 +172,7 @@ send_block_request (server_t * server, block_id_t * block_id)
 
       mtu_tune_set_size (&server->mtu_tune, &msg.block_id);
       
-      status = block_id_register (&server->data_blocks, &msg.block_id);
+      status = timestamped_block_add (&server->data_blocks, &msg.block_id);
       if (ST_SUCCESS != status)
 	break;
 
@@ -243,90 +261,23 @@ block_matched (server_t * server, block_matched_t * block_matched)
 }
 
 static status_t
-retry_splitted_block (server_t * server, block_id_t * block_id)
-{
-  status_t status = ST_SUCCESS;
-#ifdef HAVE_ZLIB
-  if (server->compress_level > 0)
-    {
-      /* we need to split lost packets approximetly half-and-half */
-      size_t size = block_id->size;
-      int size_width = mtu_tune_get_width (size);
-      /* standard packets will have size of 2^N and
-	 will be splitted in two equal parts.
-	 Last block of file might have arbitrary size. */
-      if (size - (1 << (size_width - 1)) <= (1 << size_width))
-	--size_width;
-      /* do not split on blocks less then minimal size */
-      if (size_width < MIN_TRANSFER_BLOCK_SIZE_BITS)
-	size_width = MIN_TRANSFER_BLOCK_SIZE_BITS;
-      block_id->size = 1 << size_width;
-      /* send request for the first part */
-      status = send_block_request (server, block_id);
-      /* send request for the rest */
-      if ((ST_SUCCESS == status) && (size > (1 << size_width)))
-	{
-	  block_id->offset += 1 << size_width;
-	  block_id->size = size - (1 << size_width);
-	  status = send_block_request (server, block_id);
-	}
-    }
-  else
-#endif /* HAVE_ZLIB */
-    status = send_block_request (server, block_id);
-  return (status);
-}  
-
-static void
-track_block_retry (mr_ptr_t tracked, mr_ptr_t orig, void * context)
-{
-  block_id_t * tracked_block_id = tracked.ptr;
-  block_id_t * orig_block_id = orig.ptr;
-  orig_block_id->count = ++tracked_block_id->count;
-}
-
-static status_t
 block_sent (server_t * server, block_id_t * block_id)
 {
   status_t status = ST_SUCCESS;
-  mr_ptr_t * find = sync_storage_find (&server->data_blocks, block_id, track_block_retry);
-  bool failure = (find != NULL);
-  bool need_retry = (block_id->count < MAX_RETRY);
+  mr_ptr_t * found = sync_storage_find (&server->data_blocks, block_id, NULL);
 
   DEBUG_MSG ("Got confirmation for block 0x%zx:%x.", block_id->offset, block_id->size);
 
-  block_id->count = 0;
-  
-  if (failure)
+  if (NULL == found)
+    mtu_tune_log (&server->mtu_tune, block_id->size, FALSE);
+  else
     {
-      if (!need_retry)
-	failure = (ST_SUCCESS == sync_storage_del (&server->data_blocks, block_id, NULL));
-    }
-    
-  mtu_tune_log (&server->mtu_tune, block_id->size, failure);
-  
-  if (failure)
-    {
-      DEBUG_MSG ("Packet lost for offset 0x%zx.", block_id->offset);
-      
-      if (!need_retry)
-	status = retry_splitted_block (server, block_id);
-      else
-	{
-	  msg_t msg;
-	  memset (&msg, 0, sizeof (msg));
-	  msg.msg_type = MT_BLOCK_REQUEST;
-	  msg.block_id = *block_id;
-	  
-	  status = ST_FAILURE;
-	  if (NULL != chunk_ref (server->connection->file, msg.block_id.offset))
-	    status = llist_push (&server->cmd_out, &msg);
-	}
+      timestamped_block_t timestamped_block;
+      timestamped_block.block_id = *block_id;
+      gettimeofday (&timestamped_block.time, NULL);
+      status = llist_push (&server->delayed_blocks, &timestamped_block);
     }
 
-  if (ST_SUCCESS != chunk_unref (server->connection->file, block_id->offset))
-    status = ST_FAILURE;
-  
   return (status);
 }
 
@@ -548,10 +499,64 @@ start_file_sync (void * arg)
   return (status);
 }
 
+static void *
+delayed_blocks_handler (void * arg)
+{
+  server_t * server = arg;
+  timestamped_block_t timestamped_block;
+
+  memset (&timestamped_block, 0, sizeof (timestamped_block));
+  
+  for (;;)
+    {
+      status_t status = llist_pop (&server->delayed_blocks, &timestamped_block);
+      if (ST_SUCCESS != status)
+	break;
+
+      struct timeval tv_delay;
+      tv_delay.tv_sec = timestamped_block.time.tv_sec + server->round_trip_time.tv_sec;
+      tv_delay.tv_usec = timestamped_block.time.tv_usec + server->round_trip_time.tv_usec;
+      if (tv_delay.tv_usec > MILLION)
+	{
+	  tv_delay.tv_usec -= MILLION;
+	  ++tv_delay.tv_sec;
+	}
+      struct timespec ts_delay;
+      TIMEVAL_TO_TIMESPEC (&tv_delay, &ts_delay);
+      
+      pthread_mutex_lock (&server->delayed_blocks_mutex);
+      pthread_cond_timedwait (&server->delayed_blocks_cond, &server->delayed_blocks_mutex, &ts_delay);
+      pthread_mutex_unlock (&server->delayed_blocks_mutex);
+
+      if (server->cancel)
+	break;
+      
+      if (ST_SUCCESS != sync_storage_del (&server->data_blocks, &timestamped_block.block_id, NULL))
+	continue; /* block was recieved */
+      
+      mtu_tune_log (&server->mtu_tune, timestamped_block.block_id.size, TRUE);
+      
+      status = send_block_request (server, &timestamped_block.block_id);
+      if (ST_SUCCESS != status)
+	break;
+
+      status = chunk_unref (server->connection->file, timestamped_block.block_id.offset);
+      if (ST_SUCCESS != status)
+	break;
+    }
+  return (NULL);
+}
+
+static status_t
+start_delayed_blocks_handler (void * server)
+{
+  return (start_threads (delayed_blocks_handler, 1, start_file_sync, server));
+}
+
 static status_t
 start_cmd_writer (void * server)
 {
-  return (start_threads (server_cmd_writer, 1, start_file_sync, server));
+  return (start_threads (server_cmd_writer, 1, start_delayed_blocks_handler, server));
 }
 
 void
@@ -599,9 +604,12 @@ handle_client (void * arg)
   
   server.server_ctx = accepter_ctx.server_ctx;
   
-  sync_storage_init (&server.data_blocks, block_id_compar, block_id_hash, block_id_free, "block_id_t", &server);
+  sync_storage_init (&server.data_blocks,
+		     timestamped_block_compar, timestamped_block_hash, timestamped_block_free,
+		     "timestamped_block_t", &server);
   mtu_tune_init (&server.mtu_tune);
   
+  LLIST_INIT (&server.delayed_blocks, timestamped_block_t, -1);
   LLIST_INIT (&server.task_queue, task_t, -1);
   LLIST_INIT (&server.cmd_out, msg_t, 2 * EXPECTED_PACKET_SIZE / sizeof (msg_t));
 
@@ -628,8 +636,9 @@ handle_client (void * arg)
   close (accepter_ctx.fd);
 
   /* free allocated slots */
-  llist_cancel (&server.task_queue);
   llist_cancel (&server.cmd_out);
+  llist_cancel (&server.task_queue);
+  llist_cancel (&server.delayed_blocks);
   
   sync_storage_free (&server.data_blocks);
 
@@ -757,12 +766,34 @@ data_reader_wd (void * arg)
   return (status);
 }
 
+static int
+struct_timeval_compar (struct timeval * x, struct timeval * y)
+{
+  int cmp = (x->tv_sec > y->tv_sec) - (x->tv_sec < y->tv_sec);
+  if (cmp)
+    return (cmp);
+  cmp = (x->tv_usec > y->tv_usec) - (x->tv_usec < y->tv_usec);
+  return (cmp);
+}
+
 static void
-ref_block (mr_ptr_t found, mr_ptr_t orig, void * context)
+calc_round_trip_time (mr_ptr_t found, mr_ptr_t orig, void * context)
 {
   server_t * server = context;
-  block_id_t * block_id = found.ptr;
-  chunk_ref (server->connection->file, block_id->offset);
+  timestamped_block_t * timestamped_block = found.ptr;
+
+  struct timeval now, round_trip_time;
+  gettimeofday (&now, NULL);
+  round_trip_time.tv_sec = now.tv_sec - timestamped_block->time.tv_sec;
+  round_trip_time.tv_usec = now.tv_usec - timestamped_block->time.tv_usec;
+  if (round_trip_time.tv_usec < 0)
+    {
+      --round_trip_time.tv_sec;
+      round_trip_time.tv_usec += MILLION;
+    }
+
+  if (struct_timeval_compar (&round_trip_time, &server->round_trip_time) > 0)
+    server->round_trip_time = round_trip_time;
 }
 
 static status_t
@@ -781,11 +812,14 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
     }
 
   /* unregister block in registry */
-  if (ST_SUCCESS != sync_storage_del (&server->data_blocks, block_id, ref_block)) /* put temp ref on block */
+  if (ST_SUCCESS != sync_storage_del (&server->data_blocks, block_id, calc_round_trip_time))
     return (ST_SUCCESS); /* got second duplicate */
   
-  /* get address for a block and replace temporary ref on permanent */
+  mtu_tune_log (&server->mtu_tune, block_id->size, FALSE);
+  
+  /* get address for a block */
   void * dst = file_chunks_get_addr (server->connection->file, block_id->offset);
+  /* unref initial block request */
   if (ST_SUCCESS != chunk_unref (server->connection->file, block_id->offset))
     return (ST_FAILURE);
   if (NULL == dst)
@@ -830,7 +864,7 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
       if (ST_SUCCESS == status)
 	memcpy (dst, src, block_id->size);
     }
-
+  /* unref block get_addr */
   if (ST_SUCCESS != chunk_unref (server->connection->file, block_id->offset))
     status = ST_FAILURE;
   
@@ -850,7 +884,9 @@ server_data_reader (void * arg)
   memset (buf, 0, sizeof (buf));
   memset (&connection, 0, sizeof (connection));
   memset (&server, 0, sizeof (server));
+  
   server.connection = &connection;
+  server.round_trip_time.tv_usec = CLOCKS_PER_SEC / MILLION;
 
   DEBUG_MSG ("Start main loop in data reader.");
   

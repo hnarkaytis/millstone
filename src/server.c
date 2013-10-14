@@ -1,3 +1,5 @@
+#define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
+
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif /* HAVE_CONFIG_H */
@@ -13,12 +15,10 @@
 #include <mtu_tune.h>
 #include <server.h>
 
-#ifndef __USE_GNU
-#define __USE_GNU
-#endif /* __USE_GNU */
 #include <stddef.h> /* size_t, ssize_t */
 #include <signal.h> /* signal, SIG_IGN, SIGPIPE */
 #include <unistd.h> /* TEMP_FAILURE_RETRY, close */
+#include <inttypes.h> /* SCNx64 */
 #include <string.h> /* memcpy, strerror */
 #include <errno.h> /* errno */
 #include <limits.h> /* CHAR_BIT */
@@ -33,8 +33,6 @@
 #ifdef HAVE_ZLIB
 #include <zlib.h>
 #endif /* HAVE_ZLIB */
-
-#define MILLION (1000000)
 
 TYPEDEF_STRUCT (timestamped_block_t,
 		(block_id_t, block_id),
@@ -172,15 +170,15 @@ send_block_request (server_t * server, block_id_t * block_id)
 
       mtu_tune_set_size (&server->mtu_tune, &msg.block_id);
       
-      status = timestamped_block_add (&server->data_blocks, &msg.block_id);
-      if (ST_SUCCESS != status)
-	break;
-
       if (NULL == chunk_ref (server->connection->file, msg.block_id.offset))
 	status = ST_FAILURE;
       if (ST_SUCCESS != status)
 	break;
     
+      status = timestamped_block_add (&server->data_blocks, &msg.block_id);
+      if (ST_SUCCESS != status)
+	break;
+
       status = llist_push (&server->cmd_out, &msg);
       if (ST_SUCCESS != status)
 	break;
@@ -200,7 +198,7 @@ copy_duplicate (server_t * server, block_matched_t * block_matched)
 				server->connection->file->fd,
 				block_matched->duplicate_block_id.offset);
   
-  DEBUG_MSG ("Got message that block 0x%zx:%x is duplicated of block 0x%zx:%x.",
+  DEBUG_MSG ("Got message that block 0x%" SCNx64 ":%" SCNx32 " is duplicated of block 0x%" SCNx64 ":%" SCNx32 ".",
 	     block_matched->block_id.offset, block_matched->block_id.size,
 	     block_matched->duplicate_block_id.offset, block_matched->duplicate_block_id.size);
   
@@ -266,10 +264,10 @@ block_sent (server_t * server, block_id_t * block_id)
   status_t status = ST_SUCCESS;
   mr_ptr_t * found = sync_storage_find (&server->data_blocks, block_id, NULL);
 
-  DEBUG_MSG ("Got confirmation for block 0x%zx:%x.", block_id->offset, block_id->size);
+  DEBUG_MSG ("Got confirmation for block 0x%" SCNx64 ":%" SCNx32 ".", block_id->offset, block_id->size);
 
   if (NULL == found)
-    mtu_tune_log (&server->mtu_tune, block_id->size, FALSE);
+    status = chunk_unref (server->connection->file, block_id->offset);
   else
     {
       timestamped_block_t timestamped_block;
@@ -300,7 +298,7 @@ server_worker (void * arg)
       if (ST_SUCCESS != status)
 	break;
       
-      DEBUG_MSG ("Server worker got task: offset:size 0x%zx:%x split on 0x%zx.",
+      DEBUG_MSG ("Server worker got task: offset:size 0x%" SCNx64 ":%" SCNx32 " split on 0x%zx.",
 		 task.block_id.offset, task.block_id.size, task.size);
       
       msg.block_id.size = task.size;
@@ -310,7 +308,7 @@ server_worker (void * arg)
 	  if (msg.block_id.size > task.block_id.size - offset)
 	    msg.block_id.size = task.block_id.size - offset;
 
-	  DEBUG_MSG ("Calc digest for offset 0x%zx status %d.", msg.block_id.offset, status);
+	  DEBUG_MSG ("Calc digest for offset 0x%" SCNx64 " status %d.", msg.block_id.offset, status);
 	  
 	  void * data = file_chunks_get_addr (server->connection->file, msg.block_digest.block_id.offset);
 	  if (NULL == data)
@@ -318,13 +316,13 @@ server_worker (void * arg)
 	  
 	  SHA1 (data, msg.block_digest.block_id.size, (unsigned char*)&msg.block_digest.digest);
 
-	  DEBUG_MSG ("Pushing to outgoing queue digest for offset 0x%zx.", msg.block_id.offset);
+	  DEBUG_MSG ("Pushing to outgoing queue digest for offset 0x%" SCNx64 ".", msg.block_id.offset);
 	  
 	  status = llist_push (&server->cmd_out, &msg);
 	  if (ST_SUCCESS != status)
 	    break;
 
-	  DEBUG_MSG ("Pushed digest for offset 0x%zx.", msg.block_id.offset);
+	  DEBUG_MSG ("Pushed digest for offset 0x%" SCNx64 ".", msg.block_id.offset);
 	}
       
       if (ST_SUCCESS != status)
@@ -356,7 +354,7 @@ server_cmd_writer (void * arg)
       status = llist_pop_bulk (&server->cmd_out, buf, &buf_size);
       if (ST_SUCCESS != status)
 	break;
-      
+
       DEBUG_MSG ("Write %d bytes to client %08x:%04x.", buf_size,
 		 server->connection->remote.sin_addr.s_addr, server->connection->remote.sin_port);
 
@@ -394,12 +392,14 @@ server_cmd_reader (void * arg)
 	case MT_BLOCK_MATCHED:
 	  status = block_matched (server, &msg.block_matched);
 	  break;
+	  
 	case MT_BLOCK_SEND_ERROR:
-	  ERROR_MSG ("Client failed to send data block (offset 0x%zd:%x).",
+	  ERROR_MSG ("Client failed to send data block (offset 0x%" SCNx64 ":%" SCNx32 ").",
 		     msg.block_id.offset, msg.block_id.size);
 	case MT_BLOCK_SENT:
 	  status = block_sent (server, &msg.block_id);
 	  break;
+	  
 	default:
 	  status = ST_FAILURE;
 	  break;
@@ -514,13 +514,7 @@ delayed_blocks_handler (void * arg)
 	break;
 
       struct timeval tv_delay;
-      tv_delay.tv_sec = timestamped_block.time.tv_sec + server->round_trip_time.tv_sec;
-      tv_delay.tv_usec = timestamped_block.time.tv_usec + server->round_trip_time.tv_usec;
-      if (tv_delay.tv_usec > MILLION)
-	{
-	  tv_delay.tv_usec -= MILLION;
-	  ++tv_delay.tv_sec;
-	}
+      timeradd (&timestamped_block.time, &server->round_trip_time, &tv_delay);
       struct timespec ts_delay;
       TIMEVAL_TO_TIMESPEC (&tv_delay, &ts_delay);
       
@@ -531,14 +525,14 @@ delayed_blocks_handler (void * arg)
       if (server->cancel)
 	break;
       
-      if (ST_SUCCESS != sync_storage_del (&server->data_blocks, &timestamped_block.block_id, NULL))
-	continue; /* block was recieved */
-      
-      mtu_tune_log (&server->mtu_tune, timestamped_block.block_id.size, TRUE);
-      
-      status = send_block_request (server, &timestamped_block.block_id);
-      if (ST_SUCCESS != status)
-	break;
+      if (ST_SUCCESS == sync_storage_del (&server->data_blocks, &timestamped_block.block_id, NULL))
+	{
+	  mtu_tune_log (&server->mtu_tune, timestamped_block.block_id.size, TRUE);
+	  
+	  status = send_block_request (server, &timestamped_block.block_id);
+	  if (ST_SUCCESS != status)
+	    break;
+	}
 
       status = chunk_unref (server->connection->file, timestamped_block.block_id.offset);
       if (ST_SUCCESS != status)
@@ -782,15 +776,11 @@ calc_round_trip_time (mr_ptr_t found, mr_ptr_t orig, void * context)
   server_t * server = context;
   timestamped_block_t * timestamped_block = found.ptr;
 
+  chunk_ref (server->connection->file, timestamped_block->block_id.offset);
+
   struct timeval now, round_trip_time;
   gettimeofday (&now, NULL);
-  round_trip_time.tv_sec = now.tv_sec - timestamped_block->time.tv_sec;
-  round_trip_time.tv_usec = now.tv_usec - timestamped_block->time.tv_usec;
-  if (round_trip_time.tv_usec < 0)
-    {
-      --round_trip_time.tv_sec;
-      round_trip_time.tv_usec += MILLION;
-    }
+  timersub (&now, &timestamped_block->time, &round_trip_time);
 
   if (struct_timeval_compar (&round_trip_time, &server->round_trip_time) > 0)
     server->round_trip_time = round_trip_time;
@@ -811,7 +801,7 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
       return (ST_FAILURE);
     }
 
-  /* unregister block in registry */
+  /* unregister block in registry and put temporary ref */
   if (ST_SUCCESS != sync_storage_del (&server->data_blocks, block_id, calc_round_trip_time))
     return (ST_SUCCESS); /* got second duplicate */
   
@@ -819,13 +809,13 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
   
   /* get address for a block */
   void * dst = file_chunks_get_addr (server->connection->file, block_id->offset);
-  /* unref initial block request */
+  /* unref temporary lock */
   if (ST_SUCCESS != chunk_unref (server->connection->file, block_id->offset))
     return (ST_FAILURE);
   if (NULL == dst)
     return (ST_FAILURE);
   
-  DEBUG_MSG ("Write block at offset 0x%zx:%x.", block_id->offset, block_id->size);
+  DEBUG_MSG ("Write block at offset 0x%" SCNx64 ":%" SCNx32 ".", block_id->offset, block_id->size);
 
   /* set compress level into clients properties */
   server->compress_level = *compress_level;
@@ -886,7 +876,8 @@ server_data_reader (void * arg)
   memset (&server, 0, sizeof (server));
   
   server.connection = &connection;
-  server.round_trip_time.tv_usec = CLOCKS_PER_SEC / MILLION;
+  server.round_trip_time.tv_sec = 0;
+  server.round_trip_time.tv_usec = 1000000L / CLOCKS_PER_SEC;
 
   DEBUG_MSG ("Start main loop in data reader.");
   
@@ -953,8 +944,7 @@ run_server (config_t * config)
 
   sync_storage_init (&server_ctx.clients, server_compar, server_hash, NULL, "server_t", NULL);
 
-  /* if one of the clients unexpectedly terminates
-     server should ignore SIGPIPE */
+  /* if one of the clients unexpectedly terminates server should ignore SIGPIPE */
   signal (SIGPIPE, SIG_IGN);
 
   server_ctx.data_sock = socket (PF_INET, SOCK_DGRAM, IPPROTO_UDP);

@@ -1,9 +1,7 @@
 #ifndef _FILE_H_
 #define _FILE_H_
 
-#ifndef _LARGEFILE64_SOURCE
-#define _LARGEFILE64_SOURCE
-#endif /* _LARGEFILE64_SOURCE */
+#define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -13,7 +11,6 @@
 #include <llist.h> /* llist_t */
 #include <sync_storage.h> /* sync_storage_t */
 
-#define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
 #include <fcntl.h> /* off64_t */
 #include <inttypes.h> /* uint8_t */
 #include <stdbool.h> /* bool */

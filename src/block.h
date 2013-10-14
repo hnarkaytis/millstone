@@ -1,6 +1,9 @@
 #ifndef _BLOCK_H_
 #define _BLOCK_H_
 
+#ifndef __USE_LARGEFILE64
+#define __USE_LARGEFILE64
+#endif /* __USE_LARGEFILE64 */
 #ifndef _LARGEFILE64_SOURCE
 #define _LARGEFILE64_SOURCE
 #endif /* _LARGEFILE64_SOURCE */

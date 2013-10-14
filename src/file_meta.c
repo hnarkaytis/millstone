@@ -1,8 +1,9 @@
+#define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
+
 #include <millstone.h>
 #include <logging.h>
 #include <file_meta.h>
 
-#define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
 #include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close, ftruncate64 */
 #include <errno.h> /* errno for TEMP_FAILURE_RETRY */
 #include <fcntl.h> /* open64, lseek64, SEEK_END */

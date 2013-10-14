@@ -1,4 +1,5 @@
-#define _GNU_SOURCE
+#define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
+
 #include <unistd.h> /* TEMP_FAILURE_RETRY */
 #include <errno.h> /* errno for TEMP_FAILURE_RETRY */
 

@@ -1,3 +1,5 @@
+#define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
+
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif /* HAVE_CONFIG_H */
@@ -11,6 +13,7 @@
 
 #include <stddef.h> /* size_t, ssize_t */
 #include <unistd.h> /* TEMP_FAILURE_RETRY, sysconf, close, lseek64, SEEK_END */
+#include <inttypes.h> /* SCNx64 */
 #include <errno.h> /* errno */
 #include <fcntl.h> /* open64 */
 #include <string.h> /* memset, setlen, strerror */
@@ -141,7 +144,7 @@ client_data_writer (void * arg)
 	break;
       
       DUMP_VAR (msg_t, &msg);
-      
+
       status = send_block (client, &msg.block_id);
       
       DEBUG_MSG ("Data block send status %d.", status);
@@ -295,7 +298,7 @@ digest_calculator (void * arg)
       msg.block_matched.duplicate = FALSE;
       memset (&msg.block_matched.duplicate_block_id, 0, sizeof (msg.block_matched.duplicate_block_id));
 
-      DEBUG_MSG ("Block on offset %zd matched status %d.",
+      DEBUG_MSG ("Block on offset %" SCNx64 " matched status %d.",
 		 msg.block_digest.block_id.offset, msg.block_matched.matched);
 
       if (msg.block_matched.matched)

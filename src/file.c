@@ -1,3 +1,5 @@
+#define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
+
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif /* HAVE_CONFIG_H */
@@ -7,9 +9,9 @@
 #include <sync_storage.h>
 #include <file.h>
 
-#define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
 #include <fcntl.h> /* off64_t */
 #include <stdbool.h> /* bool */
+#include <inttypes.h> /* SCNx64 */
 #include <sys/mman.h> /* mmap64, unmap */
 #include <errno.h> /* errno */
 #include <string.h> /* memset, setlen, strerror */
@@ -108,7 +110,7 @@ chunk_unref (file_t * file, off64_t offset)
   mr_ptr_t * found = sync_storage_find (&file->chunks_index, &chunk_id, dec_ref_count);
   
   if (found == NULL)
-    ERROR_MSG ("Failed to find chunk descriptor for offset 0x%zx.", offset);
+    ERROR_MSG ("Failed to find chunk descriptor for offset 0x%" SCNx64 ".", offset);
   else
     {
       chunk_t * chunk = found->ptr;
@@ -135,7 +137,7 @@ file_chunks_get_addr (file_t * file, off64_t offset)
   chunk_t * chunk = NULL;
 
   if (found == NULL)
-    ERROR_MSG ("Failed to find chunk descriptor for offset 0x%zx.", offset);
+    ERROR_MSG ("Failed to find chunk descriptor for offset 0x%" SCNx64 ".", offset);
   else
     chunk = found->ptr;
   return ((chunk == NULL) ? NULL : &chunk->data[offset - chunk->block_id.offset]);

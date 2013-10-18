@@ -201,3 +201,9 @@ file_chunks_set_release_handler (file_t * file, chunk_release_t chunk_release, v
   file->chunk_release = chunk_release;
   file->context = context;
 }
+
+void
+file_set_chunks_size (file_t * file, size_t chunk_size)
+{
+  file->chunk_size = chunk_size;
+}

@@ -16,7 +16,7 @@
 #include <sys/mman.h> /* mmap64, unmap */
 
 status_t
-read_file_meta (connection_t * connection)
+read_file_meta (connection_t * connection, typeof (((config_t *)NULL)->compress_level) * compress_level)
 {
   ssize_t len, rv;
   
@@ -25,6 +25,14 @@ read_file_meta (connection_t * connection)
   if (rv != len)
     {
       ERROR_MSG ("Failed to read file size from client.");
+      return (ST_FAILURE);
+    }
+  
+  len = sizeof (*compress_level);
+  rv = TEMP_FAILURE_RETRY (read (connection->cmd_fd, compress_level, len));
+  if (rv != len)
+    {
+      ERROR_MSG ("Failed to read compression level from client.");
       return (ST_FAILURE);
     }
   
@@ -91,6 +99,7 @@ send_file_meta (connection_t * connection)
 {
   const struct iovec iov[] = {
     { .iov_len = sizeof (connection->file->size), .iov_base = &connection->file->size, },
+    { .iov_len = sizeof (connection->file->config->compress_level), .iov_base = &connection->file->config->compress_level, },
     { .iov_len = sizeof (connection->local.sin_port), .iov_base = &connection->local.sin_port, },
     { .iov_len = strlen (connection->file->config->dst_file) + 1, .iov_base = connection->file->config->dst_file, },
   };

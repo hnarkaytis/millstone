@@ -54,7 +54,7 @@ TYPEDEF_STRUCT (server_ctx_t,
 
 TYPEDEF_STRUCT (server_t,
 		(connection_t *, connection),
-		int compress_level,
+		(typeof (((config_t *)NULL)->compress_level), compress_level),
 		(llist_t, cmd_out),
 		(llist_t, task_queue),
 		(sync_storage_t, data_blocks),
@@ -617,7 +617,8 @@ handle_client (void * arg)
 
   DEBUG_MSG ("Context for new client inited. Read file meta from client.");
 
-  status_t status = read_file_meta (&connection); /* reads UDP port of remote into connection_t and opens file for write */
+  /* reads UDP port of remote into connection_t and opens file for write */
+  status_t status = read_file_meta (&connection, &server.compress_level);
 
   DUMP_VAR (server_t, &server);
   
@@ -799,9 +800,8 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
 {
   status_t status = ST_SUCCESS;
   block_id_t * block_id = (block_id_t *)buf;
-  typeof (server->connection->file->config->compress_level) * compress_level = (void*)&buf[sizeof (*block_id)];
-  int size = buf_size - sizeof (*block_id) - sizeof (*compress_level);
-  unsigned char * src = &buf[sizeof (*block_id) + sizeof (*compress_level)];
+  int size = buf_size - sizeof (*block_id);
+  unsigned char * src = &buf[sizeof (*block_id)];
 
   if (size < 0)
     {
@@ -825,11 +825,8 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
   
   DEBUG_MSG ("Write block at offset 0x%" SCNx64 ":%" SCNx32 ".", block_id->offset, block_id->size);
 
-  /* set compress level into clients properties */
-  server->compress_level = *compress_level;
-
 #ifdef HAVE_ZLIB
-  if (*compress_level > 0)
+  if (server->compress_level > 0)
     {
       uLong length = block_id->size;
       int z_status = uncompress (dst, &length, src, size);
@@ -848,7 +845,7 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
 #endif /* HAVE_ZLIB */
     
     {
-      if (*compress_level > 0)
+      if (server->compress_level > 0)
 	{
 	  ERROR_MSG ("Got compressed data, but zlib is not available.");
 	  status = ST_FAILURE;

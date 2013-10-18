@@ -7,7 +7,7 @@
 #include <millstone.h> /* status_t  */
 #include <connection.h> /* connection_t  */
 
-extern status_t read_file_meta (connection_t * connection);
+extern status_t read_file_meta (connection_t * connection, typeof (((config_t *)NULL)->compress_level) * compress_level);
 extern status_t send_file_meta (connection_t * connection);
 
 #endif /* _FILE_META_H_ */

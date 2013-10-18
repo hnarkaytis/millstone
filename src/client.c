@@ -91,16 +91,14 @@ send_block (client_t * client, block_id_t * block_id)
     {
       struct iovec iov[] = {
 	{ .iov_len = sizeof (*block_id), .iov_base = block_id, },
-	{ .iov_len = sizeof (client->connection->file->config->compress_level),
-	  .iov_base = &client->connection->file->config->compress_level, },
 	{ .iov_len = block_id->size, .iov_base = block_data, },
       };
 
 #ifdef HAVE_ZLIB
       if (client->connection->file->config->compress_level > 0)
 	{
-	  iov[2].iov_len = length;
-	  iov[2].iov_base = buffer;
+	  iov[1].iov_len = length;
+	  iov[1].iov_base = buffer;
 	}
 #endif /* HAVE_ZLIB */
 

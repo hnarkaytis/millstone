@@ -1,7 +1,7 @@
 # -*- makefile -*-
 
 bin_PROGRAMS = millstone
-millstone_SOURCES = millstone.c logging.c msg.c file_meta.c client.c server.c sync_storage.c mtu_tune.c llist.c file.c
+millstone_SOURCES = millstone.c logging.c msg.c file_meta.c client.c server.c sync_storage.c mtu_tune.c llist.c file.c block.c
 
 AM_CFLAGS = -O2 -Wall -Werror -g --fast-math $(LIBXML2_CFLAGS)
 AM_LDFLAGS = -rdynamic

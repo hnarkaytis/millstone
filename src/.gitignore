@@ -2,6 +2,7 @@
 /Makefile
 /Makefile.in
 /TAGS
+/block.o
 /calc_digest.o
 /client.o
 /config.h

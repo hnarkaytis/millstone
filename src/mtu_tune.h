@@ -5,6 +5,7 @@
 #include <config.h>
 #endif /* HAVE_CONFIG_H */
 #include <millstone.h> /* status_t */
+#include <block.h> /* block_t */
 
 #include <metaresc.h>
 

@@ -1,10 +1,11 @@
+#define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <signal.h>
 #include <execinfo.h>
 #include <pthread.h>
-#define __USE_GNU
 #include <string.h>
 
 #include "logging.h"

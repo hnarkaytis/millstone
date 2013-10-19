@@ -1,9 +1,6 @@
 #ifndef _BLOCK_H_
 #define _BLOCK_H_
 
-#ifndef __USE_LARGEFILE64
-#define __USE_LARGEFILE64
-#endif /* __USE_LARGEFILE64 */
 #ifndef _LARGEFILE64_SOURCE
 #define _LARGEFILE64_SOURCE
 #endif /* _LARGEFILE64_SOURCE */
@@ -32,5 +29,9 @@ TYPEDEF_STRUCT (block_matched_t, ATTRIBUTES (__attribute__ ((packed))),
 		BITFIELD (bool, matched, :1),
 		BITFIELD (bool, duplicate, :1),
 		)
+
+int block_id_compar (const mr_ptr_t x, const mr_ptr_t y, const void * context);
+mr_hash_value_t block_id_hash (const mr_ptr_t x, const void * context);
+void block_id_free (const mr_ptr_t x, const void * context);
 
 #endif /* _BLOCK_H_ */

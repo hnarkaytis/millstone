@@ -77,33 +77,6 @@ TYPEDEF_STRUCT (accepter_ctx_t,
 		(pthread_mutex_t, mutex),
 		)
 
-int
-timestamped_block_compar (const mr_ptr_t x, const mr_ptr_t y, const void * context)
-{
-  timestamped_block_t * x_ = x.ptr;
-  timestamped_block_t * y_ = y.ptr;
-  int cmp = (x_->block_id.offset > y_->block_id.offset) -
-    (x_->block_id.offset < y_->block_id.offset);
-  if (cmp)
-    return (cmp);
-  cmp = (x_->block_id.size > y_->block_id.size) -
-    (x_->block_id.size < y_->block_id.size);
-  return (cmp);
-}
-
-mr_hash_value_t
-timestamped_block_hash (const mr_ptr_t x, const void * context)
-{
-  timestamped_block_t * x_ = x.ptr;
-  return (x_->block_id.offset >> MIN_TRANSFER_BLOCK_SIZE_BITS);
-}
-
-void
-timestamped_block_free (const mr_ptr_t x, const void * null)
-{
-  MR_FREE (x.ptr);
-}
-
 static status_t
 timestamped_block_add (sync_storage_t * sync_storage, block_id_t * block_id)
 {
@@ -606,7 +579,7 @@ handle_client (void * arg)
   server.cancel = FALSE;
   
   sync_storage_init (&server.data_blocks,
-		     timestamped_block_compar, timestamped_block_hash, timestamped_block_free,
+		     block_id_compar, block_id_hash, block_id_free,
 		     "timestamped_block_t", &server);
   mtu_tune_init (&server.mtu_tune);
   

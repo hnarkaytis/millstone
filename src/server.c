@@ -34,6 +34,8 @@
 #include <zlib.h>
 #endif /* HAVE_ZLIB */
 
+#define DIRECT_TRANSFER_CHUNK_SIZE (1 << 20)
+
 TYPEDEF_STRUCT (timestamped_block_t,
 		(block_id_t, block_id),
 		(struct timeval, time),
@@ -490,7 +492,7 @@ start_file_sync (void * arg)
   status_t status = ST_SUCCESS;
   if (!server->connection->file->file_exists)
     {
-      file_set_chunks_size (server->connection->file, MAX_BLOCK_SIZE / SPLIT_RATIO);
+      file_set_chunks_size (server->connection->file, DIRECT_TRANSFER_CHUNK_SIZE);
       status = chunk_file (server, send_block_request);
     }
   else

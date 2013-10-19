@@ -262,13 +262,10 @@ static status_t
 block_sent (server_t * server, block_id_t * block_id)
 {
   status_t status = ST_SUCCESS;
-  mr_ptr_t * found = sync_storage_find (&server->data_blocks, block_id, NULL);
 
   DEBUG_MSG ("Got confirmation for block 0x%" SCNx64 ":%" SCNx32 ".", block_id->offset, block_id->size);
 
-  if (NULL == found)
-    status = chunk_unref (server->connection->file, block_id->offset);
-  else
+  if (NULL != sync_storage_find (&server->data_blocks, block_id, NULL))
     {
       timestamped_block_t timestamped_block;
       timestamped_block.block_id = *block_id;
@@ -528,14 +525,14 @@ delayed_blocks_handler (void * arg)
       if (server->cancel)
 	break;
       
-      if (ST_SUCCESS == sync_storage_del (&server->data_blocks, &timestamped_block.block_id, NULL))
-	{
-	  mtu_tune_log (&server->mtu_tune, timestamped_block.block_id.size, TRUE);
+      if (ST_SUCCESS != sync_storage_del (&server->data_blocks, &timestamped_block.block_id, NULL))
+	continue;
+
+      mtu_tune_log (&server->mtu_tune, timestamped_block.block_id.size, TRUE);
 	  
-	  status = send_block_request (server, &timestamped_block.block_id);
-	  if (ST_SUCCESS != status)
-	    break;
-	}
+      status = send_block_request (server, &timestamped_block.block_id);
+      if (ST_SUCCESS != status)
+	break;
 
       status = chunk_unref (server->connection->file, timestamped_block.block_id.offset);
       if (ST_SUCCESS != status)
@@ -785,8 +782,6 @@ calc_round_trip_time (mr_ptr_t found, mr_ptr_t orig, void * context)
   server_t * server = context;
   timestamped_block_t * timestamped_block = found.ptr;
 
-  chunk_ref (server->connection->file, timestamped_block->block_id.offset);
-
   struct timeval now, round_trip_time;
   gettimeofday (&now, NULL);
   timersub (&now, &timestamped_block->time, &round_trip_time);
@@ -809,7 +804,7 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
       return (ST_FAILURE);
     }
 
-  /* unregister block in registry and put temporary ref */
+  /* unregister block in registry */
   if (ST_SUCCESS != sync_storage_del (&server->data_blocks, block_id, calc_round_trip_time))
     return (ST_SUCCESS); /* got second duplicate */
   
@@ -817,7 +812,7 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
   
   /* get address for a block */
   void * dst = file_chunks_get_addr (server->connection->file, block_id->offset);
-  /* unref temporary lock */
+  /* unref initial lock */
   if (ST_SUCCESS != chunk_unref (server->connection->file, block_id->offset))
     return (ST_FAILURE);
   if (NULL == dst)

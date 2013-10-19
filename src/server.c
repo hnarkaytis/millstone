@@ -34,7 +34,7 @@
 #include <zlib.h>
 #endif /* HAVE_ZLIB */
 
-#define DIRECT_TRANSFER_CHUNK_SIZE (1 << 21)
+#define DIRECT_TRANSFER_CHUNK_SIZE (1 << 20)
 
 TYPEDEF_STRUCT (timestamped_block_t,
 		(block_id_t, block_id),

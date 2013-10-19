@@ -81,16 +81,20 @@ static status_t
 timestamped_block_add (sync_storage_t * sync_storage, block_id_t * block_id)
 {
   timestamped_block_t * element = MR_MALLOC (sizeof (*element));
+  status_t status = ST_FAILURE;
   if (NULL == element)
     {
       FATAL_MSG ("Out of memory.");
-      return (ST_FAILURE);
+      return (status);
     }
   element->block_id = *block_id;
   gettimeofday (&element->time, NULL);
-  status_t status = sync_storage_add (sync_storage, element);
-  if (ST_SUCCESS != status)
+  mr_ptr_t * find = sync_storage_add (sync_storage, element);
+  if (NULL == find)
     MR_FREE (element);
+  else
+    status = ST_SUCCESS;
+  
   return (status);
 }
 
@@ -596,7 +600,9 @@ handle_client (void * arg)
   
   if (ST_SUCCESS == status)
     {
-      status = sync_storage_add (&server.server_ctx->clients, &server);
+      mr_ptr_t * find = sync_storage_add (&server.server_ctx->clients, &server);
+      if (NULL == find)
+	status = ST_FAILURE;
       
       DEBUG_MSG ("Added client context to registry. Return value %d.", status);
       

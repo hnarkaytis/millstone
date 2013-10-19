@@ -35,8 +35,7 @@
 #include <mr_ic.h>
 
 TYPEDEF_STRUCT (dedup_t,
-		(mr_ic_t, sent_blocks),
-		(pthread_mutex_t, mutex),
+		(sync_storage_t, sent_blocks),
 		int mem_threshold,
 		)
 
@@ -56,11 +55,17 @@ block_digest_hash (const mr_ptr_t key, const void * context)
 }
 
 static int
-block_digest_cmp (const mr_ptr_t x, const mr_ptr_t y, const void * context)
+block_digest_compar (const mr_ptr_t x, const mr_ptr_t y, const void * context)
 {
   block_digest_t * x_block_digest = x.ptr;
   block_digest_t * y_block_digest = y.ptr;
   return (memcmp (x_block_digest->digest, y_block_digest->digest, sizeof (x_block_digest->digest)));
+}
+
+void
+block_digest_free (const mr_ptr_t x, const void * context)
+{
+  MR_FREE (x.ptr);
 }
 
 static status_t
@@ -201,39 +206,24 @@ client_cmd_writer (void * arg)
   return (NULL);
 }
 
-static status_t
+static void
 dedup_init (dedup_t * dedup, int mem_threshold)
 {
   memset (dedup, 0, sizeof (*dedup));
   dedup->mem_threshold = mem_threshold;
-  pthread_mutex_init (&dedup->mutex, NULL);
-  mr_status_t mr_status = mr_ic_new (&dedup->sent_blocks, block_digest_hash, block_digest_cmp, "block_digest_t", MR_IC_HASH_TREE);
-  return ((MR_SUCCESS == mr_status) ? ST_SUCCESS : ST_FAILURE);
-}
-
-static mr_status_t
-free_sent_blocks (mr_ptr_t node, const void * context)
-{
-  MR_FREE (node.ptr);
-  return (MR_SUCCESS);
+  sync_storage_init (&dedup->sent_blocks, block_digest_compar, block_digest_hash, block_digest_free, "block_digest_t", dedup);
 }
 
 static void
 dedup_free (dedup_t * dedup)
 {
-  pthread_mutex_lock (&dedup->mutex);
-  mr_ic_foreach (&dedup->sent_blocks, free_sent_blocks, NULL);
-  mr_ic_free (&dedup->sent_blocks, NULL);
-  pthread_mutex_unlock (&dedup->mutex);
-  memset (dedup, 0, sizeof (*dedup));
+  sync_storage_free (&dedup->sent_blocks);
 }
 
 static block_id_t *
 dedup_check (dedup_t * dedup, block_digest_t * block_digest)
 {
-  pthread_mutex_lock (&dedup->mutex);
-  mr_ptr_t * find = mr_ic_find (&dedup->sent_blocks, block_digest, NULL);
-  pthread_mutex_unlock (&dedup->mutex);
+  mr_ptr_t * find = sync_storage_find (&dedup->sent_blocks, block_digest, NULL);
   return (find ? find->ptr : NULL);
 }
 
@@ -252,10 +242,8 @@ dedup_add (dedup_t * dedup, block_digest_t * block_digest)
       if (allocated_block_digest != NULL)
 	{
 	  *allocated_block_digest = *block_digest;
-	  pthread_mutex_lock (&dedup->mutex);
-	  mr_ptr_t * find = mr_ic_add (&dedup->sent_blocks, allocated_block_digest, NULL);
-	  pthread_mutex_unlock (&dedup->mutex);
-	  if ((find != NULL) && (find->ptr != allocated_block_digest))
+	  mr_ptr_t * find = sync_storage_add (&dedup->sent_blocks, allocated_block_digest);
+	  if ((NULL == find) || (find->ptr != allocated_block_digest))
 	    MR_FREE (allocated_block_digest);
 	}
     }
@@ -419,9 +407,7 @@ run_session (connection_t * connection)
   LLIST_INIT (&client.cmd_in, msg_t, -1);
   LLIST_INIT (&client.data_in, msg_t, -1);
 
-  status = dedup_init (&client.dedup, connection->file->config->mem_threshold);
-  if (ST_SUCCESS != status)
-    return (status);
+  dedup_init (&client.dedup, connection->file->config->mem_threshold);
   
   DEBUG_MSG ("Session inited with.");
   

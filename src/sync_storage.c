@@ -14,20 +14,14 @@ get_backet (sync_storage_t * sync_storage, mr_ptr_t mr_ptr)
   return (&sync_storage->table[hash_val % size]);
 }
 
-status_t
+mr_ptr_t *
 sync_storage_add (sync_storage_t * sync_storage, mr_ptr_t mr_ptr)
 {
-  status_t status = ST_SUCCESS;
   sync_rb_tree_t * bucket = get_backet (sync_storage, mr_ptr);
   pthread_mutex_lock (&bucket->mutex);
-  void * find = mr_tsearch (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
+  mr_ptr_t * find = mr_tsearch (mr_ptr, &bucket->tree, sync_storage->compar_fn, sync_storage->context);
   pthread_mutex_unlock (&bucket->mutex);
-  if (NULL == find)
-    {
-      FATAL_MSG ("Out of memory.");
-      status = ST_FAILURE;
-    }
-  return (status);
+  return (find);
 }
 
 status_t

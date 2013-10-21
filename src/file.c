@@ -20,12 +20,20 @@
 
 #include <metaresc.h>
 
+off64_t
+chunk_get_id (const file_t * file, off64_t offset)
+{
+  return (offset / file->chunk_size);
+}
+
 int
 chunk_compar (const mr_ptr_t x, const mr_ptr_t y, const void * context)
 {
   const file_t * file = context;
-  off64_t x_id = ((chunk_t*)x.ptr)->block_id.offset / file->chunk_size;
-  off64_t y_id = ((chunk_t*)y.ptr)->block_id.offset / file->chunk_size;
+  const chunk_t * x_ = x.ptr;
+  const chunk_t * y_ = y.ptr;
+  off64_t x_id = chunk_get_id (file, x_->block_id.offset);
+  off64_t y_id = chunk_get_id (file, y_->block_id.offset);
   return ((x_id > y_id) - (x_id < y_id));
 }
 
@@ -33,10 +41,11 @@ mr_hash_value_t
 chunk_hash (const mr_ptr_t x, const void * context)
 {
   const file_t * file = context;
-  return (((chunk_t*)x.ptr)->block_id.offset / file->chunk_size);
+  const chunk_t * chunk = x.ptr;
+  return (chunk_get_id (file, chunk->block_id.offset));
 }
 
-chunk_t *
+static chunk_t *
 chunk_map (file_t * file, off64_t offset)
 {
   chunk_t * chunk = NULL;
@@ -73,6 +82,7 @@ chunk_map (file_t * file, off64_t offset)
     }
 
   DUMP_VAR (file_t, file);
+
   return (chunk);
 }
 
@@ -87,11 +97,13 @@ chunk_t *
 chunk_ref (file_t * file, off64_t offset)
 {
   chunk_t chunk_id = { .block_id = { .offset = offset - offset % file->chunk_size, }, };
-  mr_ptr_t * found = sync_storage_find (&file->chunks_index, &chunk_id, inc_ref_count);
+  mr_ptr_t * find = sync_storage_find (&file->chunks_index, &chunk_id, inc_ref_count);
+  chunk_t * chunk = (NULL == find) ? chunk_map (file, offset) : find->ptr;
   
-  if (NULL == found)
-    return (chunk_map (file, offset));
-  return (found->ptr);
+  if (file->cancel)
+    chunk = NULL;
+  
+  return (chunk);
 }
 
 static void
@@ -99,7 +111,20 @@ dec_ref_count (mr_ptr_t found, mr_ptr_t orig, void * context)
 {
   chunk_t * chunk = found.ptr;
   chunk_t * chunk_id = orig.ptr;
-  chunk_id->ref_count = --chunk->ref_count;
+  --chunk->ref_count;
+  *chunk_id = *chunk;
+}
+
+static status_t
+chunk_release (file_t * file, chunk_t * chunk)
+{
+  if (file->chunk_release)
+    file->chunk_release (chunk, file->context);
+	  
+  sync_storage_del (&file->chunks_index, chunk, NULL);
+  munmap (chunk->data, chunk->block_id.size);
+  chunk->data = NULL;
+  return (llist_push (&file->chunks_pool, &chunk));
 }
 
 status_t
@@ -109,23 +134,17 @@ chunk_unref (file_t * file, off64_t offset)
   chunk_t chunk_id = { .block_id = { .offset = offset - offset % file->chunk_size, }, };
   mr_ptr_t * found = sync_storage_find (&file->chunks_index, &chunk_id, dec_ref_count);
   
-  if (found == NULL)
-    ERROR_MSG ("Failed to find chunk descriptor for offset 0x%" SCNx64 ".", offset);
-  else
+  if (found != NULL)
     {
       chunk_t * chunk = found->ptr;
       status = ST_SUCCESS;
       if (0 == chunk_id.ref_count)
-	{
-	  if (file->chunk_release)
-	    file->chunk_release (chunk, file->context);
-	  
-	  sync_storage_del (&file->chunks_index, chunk, NULL);
-	  munmap (chunk->data, chunk->block_id.size);
-	  chunk->data = NULL;
-	  status = llist_push (&file->chunks_pool, &chunk);
-	}
+	status = chunk_release (file, chunk);
     }
+  
+  if (file->cancel)
+    status = ST_FAILURE;
+  
   return (status);
 }
 
@@ -133,14 +152,9 @@ void *
 file_chunks_get_addr (file_t * file, off64_t offset)
 {
   chunk_t chunk_id = { .block_id = { .offset = offset - offset % file->chunk_size, }, };
-  mr_ptr_t * found = sync_storage_find (&file->chunks_index, &chunk_id, inc_ref_count);
-  chunk_t * chunk = NULL;
-
-  if (found == NULL)
-    ERROR_MSG ("Failed to find chunk descriptor for offset 0x%" SCNx64 ".", offset);
-  else
-    chunk = found->ptr;
-  return ((chunk == NULL) ? NULL : &chunk->data[offset - chunk->block_id.offset]);
+  mr_ptr_t * find = sync_storage_find (&file->chunks_index, &chunk_id, inc_ref_count);
+  chunk_t * chunk = (NULL == find) ? NULL : find->ptr;
+  return ((NULL == chunk) ? NULL : &chunk->data[offset - chunk->block_id.offset]);
 }
 
 TYPEDEF_STRUCT (chunk_ptr_t, ATTRIBUTES (__attribute__ ((packed))),
@@ -159,31 +173,41 @@ file_chunks_init (file_t * file, int protect, int flags, size_t size)
   file->chunk_size = size - size % PAGE_SIZE;
   file->chunk_release = NULL;
   file->context = NULL;
+  file->cancel = FALSE;
   file->protect = protect;
   file->flags = flags;
   
   for (i = 0; i < sizeof (file->chunks) / sizeof (file->chunks[0]); ++i)
     {
       chunk_t * chunk = &file->chunks[i];
+      chunk->ref_count = 0;
       llist_push (&file->chunks_pool, &chunk);
     }
-}
-
-static mr_status_t
-chunk_unmap (const mr_ptr_t node, const void * context)
-{
-  chunk_t * chunk = node.ptr;
-  if (chunk->data != NULL)
-    munmap (chunk->data, chunk->block_id.size);
-  chunk->data = NULL;
-  return (MR_SUCCESS);
 }
 
 void
 file_chunks_cancel (file_t * file)
 {
+  file->cancel = TRUE;
   llist_cancel (&file->chunks_pool);
-  sync_storage_yeld (&file->chunks_index, chunk_unmap);
+}
+
+static mr_status_t
+chunk_free (const mr_ptr_t node, const void * context)
+{
+  chunk_t * chunk = node.ptr;
+  if (chunk->data != NULL)
+    {
+      munmap (chunk->data, chunk->block_id.size);
+      chunk->data = NULL;
+    }
+  return (MR_SUCCESS);
+}
+
+void
+file_chunks_free (file_t * file)
+{
+  sync_storage_yeld (&file->chunks_index, chunk_free);
 }
 
 void
@@ -192,7 +216,8 @@ file_chunks_finilize (file_t * file)
   int i;
   chunk_t * chunk;
   for (i = 0; i < sizeof (file->chunks) / sizeof (file->chunks[0]); ++i)
-    llist_pop (&file->chunks_pool, &chunk);
+    if (ST_SUCCESS != llist_pop (&file->chunks_pool, &chunk))
+      break;
 }
   
 void

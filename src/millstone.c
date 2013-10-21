@@ -127,7 +127,7 @@ parse_args (int argc, char * argv[], config_t * config)
   config->compress_level = DEFAULT_COMPRESS_LEVEL;
   config->workers_number = get_cores ();
   
-  while ((c = getopt_long (argc, argv, "c:l:w:", long_options, &option_index)) != -1)
+  while ((c = getopt_long (argc, argv, "c:l:w:m:", long_options, &option_index)) != -1)
     switch (c)
       {
       case 0:

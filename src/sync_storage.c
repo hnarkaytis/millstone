@@ -99,6 +99,10 @@ sync_storage_yeld (sync_storage_t * sync_storage, mr_visit_fn_t visit_fn)
 {
   int i;
   mr_free_fn_t free_fn = sync_storage->free_fn;
+  sync_storage_rbtree_foreach_context_t ssrbtfc = {
+    .sync_storage = sync_storage,
+    .visit_fn = visit_fn,
+  };
   
   if (NULL == free_fn)
     free_fn = dummy_free_fn;
@@ -106,11 +110,6 @@ sync_storage_yeld (sync_storage_t * sync_storage, mr_visit_fn_t visit_fn)
   for (i = 0; i < sizeof (sync_storage->table) / sizeof (sync_storage->table[0]); ++i)
     {
       pthread_mutex_lock (&sync_storage->table[i].mutex);
-      sync_storage_rbtree_foreach_context_t ssrbtfc = {
-	.sync_storage = sync_storage,
-	.visit_fn = visit_fn,
-      };
-
       if (visit_fn != NULL)
 	{
 	  if (0 != setjmp (ssrbtfc.jmp_buf))

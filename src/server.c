@@ -54,19 +54,30 @@ TYPEDEF_STRUCT (server_ctx_t,
 		(struct sockaddr_in, server_name),
 		)
 
+TYPEDEF_STRUCT (blocks_trasfer_t,
+		(mtu_tune_t, mtu_tune),
+		(sync_storage_t, req_blocks),
+		(struct timeval, round_trip_time),
+		(llist_t, delayed_blocks),
+		(pthread_cond_t, cond),
+		(pthread_mutex_t, mutex),
+		(bool, cancel),
+		)
+
+TYPEDEF_STRUCT (ref_count_t,
+		int count,
+		(pthread_cond_t, cond),
+		(pthread_mutex_t, mutex),
+		)
+
 TYPEDEF_STRUCT (server_t,
+		(server_ctx_t *, server_ctx),
 		(connection_t *, connection),
 		(typeof (((config_t *)NULL)->compress_level), compress_level),
 		(llist_t, cmd_out),
 		(llist_t, task_queue),
-		(sync_storage_t, data_blocks),
-		(mtu_tune_t, mtu_tune),
-		(server_ctx_t *, server_ctx),
-		(struct timeval, round_trip_time),
-		(llist_t, delayed_blocks),
-		(pthread_cond_t, delayed_blocks_cond),
-		(pthread_mutex_t, delayed_blocks_mutex),
-		(bool, cancel),
+		(blocks_trasfer_t, blocks_trasfer),
+		(ref_count_t, ref_count),
 		)
 
 TYPEDEF_STRUCT (accepter_ctx_t,
@@ -125,12 +136,14 @@ server_hash (const mr_ptr_t key, const void * context)
 static void
 server_cancel (server_t * server)
 {
-  server->cancel = TRUE;
   llist_cancel (&server->task_queue);
   llist_cancel (&server->cmd_out);
-  llist_cancel (&server->delayed_blocks);
+
   file_chunks_cancel (server->connection->file);
-  pthread_cond_broadcast (&server->delayed_blocks_cond);
+
+  server->blocks_trasfer.cancel = TRUE;
+  llist_cancel (&server->blocks_trasfer.delayed_blocks);
+  pthread_cond_broadcast (&server->blocks_trasfer.cond);
 }
 
 static status_t
@@ -147,14 +160,14 @@ send_block_request (server_t * server, block_id_t * block_id)
     {
       msg.block_id.size = block_id->size - (msg.block_id.offset - block_id->offset);
 
-      mtu_tune_set_size (&server->mtu_tune, &msg.block_id);
+      mtu_tune_set_size (&server->blocks_trasfer.mtu_tune, &msg.block_id);
       
       if (NULL == chunk_ref (server->connection->file, msg.block_id.offset))
 	status = ST_FAILURE;
       if (ST_SUCCESS != status)
 	break;
     
-      status = timestamped_block_add (&server->data_blocks, &msg.block_id);
+      status = timestamped_block_add (&server->blocks_trasfer.req_blocks, &msg.block_id);
       if (ST_SUCCESS != status)
 	break;
 
@@ -244,12 +257,12 @@ block_sent (server_t * server, block_id_t * block_id)
 
   DEBUG_MSG ("Got confirmation for block 0x%" SCNx64 ":%" SCNx32 ".", block_id->offset, block_id->size);
 
-  if (NULL != sync_storage_find (&server->data_blocks, block_id, NULL))
+  if (NULL != sync_storage_find (&server->blocks_trasfer.req_blocks, block_id, NULL))
     {
       timestamped_block_t timestamped_block;
       timestamped_block.block_id = *block_id;
       gettimeofday (&timestamped_block.time, NULL);
-      status = llist_push (&server->delayed_blocks, &timestamped_block);
+      status = llist_push (&server->blocks_trasfer.delayed_blocks, &timestamped_block);
     }
 
   return (status);
@@ -285,7 +298,8 @@ server_worker (void * arg)
 	    msg.block_id.size = task.block_id.size - offset;
 
 	  DEBUG_MSG ("Calc digest for offset 0x%" SCNx64 " status %d.", msg.block_id.offset, status);
-	  
+
+	  status = ST_FAILURE;
 	  void * data = file_chunks_get_addr (server->connection->file, msg.block_digest.block_id.offset);
 	  if (NULL == data)
 	    break;
@@ -370,7 +384,7 @@ server_cmd_reader (void * arg)
 	  break;
 	  
 	case MT_BLOCK_SEND_ERROR:
-	  ERROR_MSG ("Client failed to send data block (offset 0x%" SCNx64 ":%" SCNx32 ").",
+	  DEBUG_MSG ("Client failed to send data block (offset 0x%" SCNx64 ":%" SCNx32 ").",
 		     msg.block_id.offset, msg.block_id.size);
 	case MT_BLOCK_SENT:
 	  status = block_sent (server, &msg.block_id);
@@ -482,32 +496,33 @@ static void *
 delayed_blocks_handler (void * arg)
 {
   server_t * server = arg;
+  blocks_trasfer_t * blocks_trasfer = &server->blocks_trasfer;
   timestamped_block_t timestamped_block;
 
   memset (&timestamped_block, 0, sizeof (timestamped_block));
   
   for (;;)
     {
-      status_t status = llist_pop (&server->delayed_blocks, &timestamped_block);
+      status_t status = llist_pop (&blocks_trasfer->delayed_blocks, &timestamped_block);
       if (ST_SUCCESS != status)
 	break;
 
       struct timeval tv_delay;
-      timeradd (&timestamped_block.time, &server->round_trip_time, &tv_delay);
+      timeradd (&timestamped_block.time, &blocks_trasfer->round_trip_time, &tv_delay);
       struct timespec ts_delay;
       TIMEVAL_TO_TIMESPEC (&tv_delay, &ts_delay);
       
-      pthread_mutex_lock (&server->delayed_blocks_mutex);
-      pthread_cond_timedwait (&server->delayed_blocks_cond, &server->delayed_blocks_mutex, &ts_delay);
-      pthread_mutex_unlock (&server->delayed_blocks_mutex);
+      pthread_mutex_lock (&blocks_trasfer->mutex);
+      pthread_cond_timedwait (&blocks_trasfer->cond, &blocks_trasfer->mutex, &ts_delay);
+      pthread_mutex_unlock (&blocks_trasfer->mutex);
 
-      if (server->cancel)
+      if (blocks_trasfer->cancel)
 	break;
       
-      if (ST_SUCCESS != sync_storage_del (&server->data_blocks, &timestamped_block.block_id, NULL))
+      if (ST_SUCCESS != sync_storage_del (&blocks_trasfer->req_blocks, &timestamped_block.block_id, NULL))
 	continue;
 
-      mtu_tune_log (&server->mtu_tune, timestamped_block.block_id.size, TRUE);
+      mtu_tune_log (&blocks_trasfer->mtu_tune, timestamped_block.block_id.size, TRUE);
 	  
       status = send_block_request (server, &timestamped_block.block_id);
       if (ST_SUCCESS != status)
@@ -533,7 +548,7 @@ start_cmd_writer (void * server)
 }
 
 void
-chunk_release (chunk_t * chunk, void * context)
+server_chunk_release (chunk_t * chunk, void * context)
 {
   server_t * server = context;
   msg_t msg;
@@ -573,21 +588,26 @@ handle_client (void * arg)
   memset (&server, 0, sizeof (server));
   server.connection = &connection;
   
-  file_chunks_set_release_handler (&file, chunk_release, &server);
+  file_chunks_set_release_handler (&file, server_chunk_release, &server);
   
   server.server_ctx = accepter_ctx.server_ctx;
-  server.round_trip_time.tv_sec = 0;
-  server.round_trip_time.tv_usec = 1000000L / 100;
-  pthread_mutex_init (&server.delayed_blocks_mutex, NULL);
-  pthread_cond_init (&server.delayed_blocks_cond, NULL);
-  server.cancel = FALSE;
+
+  server.ref_count.count = 0;
+  pthread_mutex_init (&server.ref_count.mutex, NULL);
+  pthread_cond_init (&server.ref_count.cond, NULL);
   
-  sync_storage_init (&server.data_blocks,
+  server.blocks_trasfer.round_trip_time.tv_sec = 0;
+  server.blocks_trasfer.round_trip_time.tv_usec = 1000000L / 100;
+  pthread_mutex_init (&server.blocks_trasfer.mutex, NULL);
+  pthread_cond_init (&server.blocks_trasfer.cond, NULL);
+  server.blocks_trasfer.cancel = FALSE;
+  
+  sync_storage_init (&server.blocks_trasfer.req_blocks,
 		     block_id_compar, block_id_hash, block_id_free,
 		     "timestamped_block_t", &server);
-  mtu_tune_init (&server.mtu_tune);
+  mtu_tune_init (&server.blocks_trasfer.mtu_tune);
   
-  LLIST_INIT (&server.delayed_blocks, timestamped_block_t, -1);
+  LLIST_INIT (&server.blocks_trasfer.delayed_blocks, timestamped_block_t, -1);
   LLIST_INIT (&server.task_queue, task_t, -1);
   LLIST_INIT (&server.cmd_out, msg_t, 2 * EXPECTED_PACKET_SIZE / sizeof (msg_t));
 
@@ -610,6 +630,10 @@ handle_client (void * arg)
 	status = start_threads (server_cmd_reader, 1, start_cmd_writer, &server);
 
       sync_storage_del (&server.server_ctx->clients, &server, NULL);
+      pthread_mutex_lock (&server.ref_count.mutex);
+      while (server.ref_count.count != 0)
+	pthread_cond_wait (&server.ref_count.cond, &server.ref_count.mutex);
+      pthread_mutex_unlock (&server.ref_count.mutex);
       close (file.fd);
     }
   
@@ -619,11 +643,11 @@ handle_client (void * arg)
   /* free allocated slots */
   llist_cancel (&server.cmd_out);
   llist_cancel (&server.task_queue);
-  llist_cancel (&server.delayed_blocks);
+  llist_cancel (&server.blocks_trasfer.delayed_blocks);
   
-  sync_storage_free (&server.data_blocks);
+  sync_storage_free (&server.blocks_trasfer.req_blocks);
 
-  file_chunks_cancel (&file);
+  file_chunks_free (&file);
   
   DEBUG_MSG ("Closed connection to client: %08x:%04x.", accepter_ctx.remote.sin_addr.s_addr, accepter_ctx.remote.sin_port);
 
@@ -767,8 +791,8 @@ calc_round_trip_time (mr_ptr_t found, mr_ptr_t orig, void * context)
   gettimeofday (&now, NULL);
   timersub (&now, &timestamped_block->time, &round_trip_time);
 
-  if (struct_timeval_compar (&round_trip_time, &server->round_trip_time) > 0)
-    server->round_trip_time = round_trip_time;
+  if (struct_timeval_compar (&round_trip_time, &server->blocks_trasfer.round_trip_time) > 0)
+    server->blocks_trasfer.round_trip_time = round_trip_time;
 }
 
 static status_t
@@ -786,16 +810,18 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
     }
 
   /* unregister block in registry */
-  if (ST_SUCCESS != sync_storage_del (&server->data_blocks, block_id, calc_round_trip_time))
+  if (ST_SUCCESS != sync_storage_del (&server->blocks_trasfer.req_blocks, block_id, calc_round_trip_time))
     return (ST_SUCCESS); /* got second duplicate */
   
-  mtu_tune_log (&server->mtu_tune, block_id->size, FALSE);
+  mtu_tune_log (&server->blocks_trasfer.mtu_tune, block_id->size, FALSE);
   
   /* get address for a block */
   void * dst = file_chunks_get_addr (server->connection->file, block_id->offset);
-  /* unref initial lock */
+
+  /* unref initial ref */
   if (ST_SUCCESS != chunk_unref (server->connection->file, block_id->offset))
-    return (ST_FAILURE);
+    status = ST_FAILURE;
+
   if (NULL == dst)
     return (ST_FAILURE);
   
@@ -835,6 +861,7 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
       if (ST_SUCCESS == status)
 	memcpy (dst, src, block_id->size);
     }
+  
   /* unref block get_addr */
   if (ST_SUCCESS != chunk_unref (server->connection->file, block_id->offset))
     status = ST_FAILURE;
@@ -842,6 +869,24 @@ put_data_block (server_t * server, unsigned char * buf, int buf_size)
   DEBUG_MSG ("Write block done.");
   
   return (status);
+}
+
+static void
+server_ref (mr_ptr_t found, mr_ptr_t orig, void * context)
+{
+  server_t * server = found.ptr;
+  pthread_mutex_lock (&server->ref_count.mutex);
+  ++server->ref_count.count;
+  pthread_mutex_unlock (&server->ref_count.mutex);
+}
+
+static void
+server_unref (server_t * server)
+{
+  pthread_mutex_lock (&server->ref_count.mutex);
+  if (0 == --server->ref_count.count)
+    pthread_cond_broadcast (&server->ref_count.cond);
+  pthread_mutex_unlock (&server->ref_count.mutex);
 }
 
 static void *
@@ -885,7 +930,7 @@ server_data_reader (void * arg)
 	  continue;
 	}
       connection.remote = addr.addr_in;
-      mr_ptr_t * find = sync_storage_find (&server_ctx->clients, &server, NULL);
+      mr_ptr_t * find = sync_storage_find (&server_ctx->clients, &server, server_ref);
       if (NULL == find)
 	{
 	  DEBUG_MSG ("Unknown or disconnected client.");
@@ -895,6 +940,8 @@ server_data_reader (void * arg)
       DEBUG_MSG ("Data reader identified client and initiated write.");
       
       put_data_block (find->ptr, buf, rv);
+
+      server_unref (find->ptr);
     }
   return (NULL);
 }

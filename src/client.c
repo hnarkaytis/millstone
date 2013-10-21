@@ -210,6 +210,9 @@ client_cmd_writer (void * arg)
 static void
 dedup_add (sync_storage_t * sync_storage, block_digest_t * block_digest, int mem_threshold)
 {
+  if (100 == mem_threshold)
+    return;
+  
   long avphys_pages = sysconf (_SC_AVPHYS_PAGES);
   static long phys_pages = 0;
 

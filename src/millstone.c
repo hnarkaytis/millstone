@@ -21,7 +21,7 @@
 #define DEFAULT_COMPRESS_LEVEL (0)
 #endif /* HAVE_ZLIB */
 
-#define DEFAULT_MEM_THRESHOLD (5)
+#define DEFAULT_MEM_THRESHOLD (100)
 
 status_t
 start_threads (void * (* handler) (void *), int count, status_t (*nested_handler) (void *), void * arg)

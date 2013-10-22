@@ -440,10 +440,10 @@ start_cmd_writer (void * arg)
 }
 
 static status_t
-start_data_writers (void * arg)
+start_data_writer (void * arg)
 {
   client_t * client = arg;
-  return (start_threads (client_data_writer, client->connection->file->config->workers_number, start_cmd_writer, client));
+  return (start_threads (client_data_writer, 1, start_cmd_writer, client));
 }
 
 static mr_status_t
@@ -488,7 +488,7 @@ run_session (connection_t * connection)
   
   DEBUG_MSG ("Session inited with.");
   
-  status = start_threads (digest_calculator, connection->file->config->workers_number, start_data_writers, &client);
+  status = start_threads (digest_calculator, connection->file->config->workers_number, start_data_writer, &client);
 
   file_chunks_free (connection->file);
   sync_storage_free (&client.chunk_dedup);

@@ -35,7 +35,7 @@
 #include <mr_ic.h>
 
 TYPEDEF_STRUCT (chunk_dedup_t,
-		(off64_t, chunk_id),
+		(chunk_t *, chunk),
 		(sync_storage_t, dedup),
 		)
 
@@ -210,7 +210,7 @@ client_cmd_writer (void * arg)
 static void
 dedup_add (sync_storage_t * sync_storage, block_digest_t * block_digest, int mem_threshold)
 {
-  if (100 == mem_threshold)
+  if (mem_threshold >= 100)
     return;
   
   long avphys_pages = sysconf (_SC_AVPHYS_PAGES);
@@ -218,7 +218,7 @@ dedup_add (sync_storage_t * sync_storage, block_digest_t * block_digest, int mem
 
   if (0 == phys_pages)
     phys_pages = sysconf (_SC_PHYS_PAGES);
-
+  
   if (100 * avphys_pages > phys_pages * mem_threshold)
     {
       block_digest_t * allocated_block_digest = MR_MALLOC (sizeof (*allocated_block_digest));
@@ -236,7 +236,7 @@ mr_hash_value_t
 chunk_dedup_hash (const mr_ptr_t key, const void * context)
 {
   chunk_dedup_t * chunk_dedup = key.ptr;
-  return (chunk_dedup->chunk_id);
+  return ((long)chunk_dedup->chunk);
 }
 
 int
@@ -244,7 +244,7 @@ chunk_dedup_compar (const mr_ptr_t x, const mr_ptr_t y, const void * context)
 {
   chunk_dedup_t * x_ = x.ptr;
   chunk_dedup_t * y_ = y.ptr;
-  return ((x_->chunk_id > y_->chunk_id) - (x_->chunk_id < y_->chunk_id));
+  return ((x_->chunk > y_->chunk) - (x_->chunk < y_->chunk));
 }
 
 void
@@ -256,12 +256,9 @@ chunk_dedup_free (const mr_ptr_t x, const void * context)
 }
 
 static chunk_dedup_t *
-chunk_dedup_find (sync_storage_t * sync_storage, off64_t chunk_id)
+chunk_dedup_find (sync_storage_t * sync_storage, chunk_t * chunk)
 {
-  chunk_dedup_t chunk_dedup;
-  memset (&chunk_dedup, 0, sizeof (chunk_dedup));
-  chunk_dedup.chunk_id = chunk_id;
-  mr_ptr_t * find = sync_storage_find (sync_storage, &chunk_dedup, NULL);
+  mr_ptr_t * find = sync_storage_find (sync_storage, &chunk, NULL);
   return (find ? find->ptr : NULL);
 }
 
@@ -292,6 +289,8 @@ digest_calculator (void * arg)
       
       SHA1 (block_data, block_digest.block_id.size, (unsigned char*)&block_digest.digest);
 
+      chunk_t * chunk = chunk_ref (client->connection->file, block_digest.block_id.offset);
+      
       if (ST_SUCCESS != chunk_unref (client->connection->file, block_digest.block_id.offset))
 	break;
 
@@ -314,14 +313,17 @@ digest_calculator (void * arg)
 	      msg.block_matched.duplicate = TRUE;
 	      msg.block_matched.duplicate_block_id = *matched_block_id;
 	    }
-	  else
+	  else if (chunk != NULL)
 	    {
-	      off64_t chunk_id = chunk_get_id (client->connection->file, block_digest.block_id.offset);
-	      chunk_dedup_t * chunk_dedup = chunk_dedup_find (&client->chunk_dedup, chunk_id);
+	      chunk_dedup_t * chunk_dedup = chunk_dedup_find (&client->chunk_dedup, chunk);
 	      if (chunk_dedup != NULL)
 		dedup_add (&chunk_dedup->dedup, &block_digest, client->connection->file->config->mem_threshold);
 	    }
 	}
+      
+      if (chunk != NULL)
+	if (ST_SUCCESS != chunk_unref (client->connection->file, block_digest.block_id.offset))
+	  break;
       
       DUMP_VAR (msg_t, &msg);
       
@@ -351,8 +353,7 @@ block_ref (client_t * client, block_id_t * block_id)
     status = ST_FAILURE;
   else
     {
-      off64_t chunk_id = chunk_get_id (client->connection->file, block_id->offset);
-      chunk_dedup_t * chunk_dedup = chunk_dedup_find (&client->chunk_dedup, chunk_id);
+      chunk_dedup_t * chunk_dedup = chunk_dedup_find (&client->chunk_dedup, chunk);
       if (chunk_dedup == NULL)
 	{
 	  chunk_dedup = MR_MALLOC (sizeof (*chunk_dedup));
@@ -361,7 +362,7 @@ block_ref (client_t * client, block_id_t * block_id)
 	  else
 	    {
 	      memset (chunk_dedup, 0, sizeof (*chunk_dedup));
-	      chunk_dedup->chunk_id = chunk_id;
+	      chunk_dedup->chunk = chunk;
 	      sync_storage_init (&chunk_dedup->dedup, block_digest_compar, block_digest_hash, block_digest_free, "block_digest_t", client);
 	      mr_ptr_t * find = sync_storage_add (&client->chunk_dedup, chunk_dedup);
 	      if ((NULL == find) || (find->ptr != chunk_dedup))
@@ -458,8 +459,7 @@ void
 client_chunk_release (chunk_t * chunk, void * context)
 {
   client_t * client = context;
-  off64_t chunk_id = chunk_get_id (client->connection->file, chunk->block_id.offset);
-  chunk_dedup_t * chunk_dedup = chunk_dedup_find (&client->chunk_dedup, chunk_id);
+  chunk_dedup_t * chunk_dedup = chunk_dedup_find (&client->chunk_dedup, chunk);
   if (chunk_dedup != NULL)
     sync_storage_yeld (&chunk_dedup->dedup, block_digest_register);
 }

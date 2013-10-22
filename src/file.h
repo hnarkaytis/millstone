@@ -41,7 +41,6 @@ TYPEDEF_STRUCT (file_t,
 		bool cancel,
 		)
 
-extern off64_t chunk_get_id (const file_t * file, off64_t offset);
 extern chunk_t * chunk_ref (file_t * file, off64_t offset);
 extern status_t chunk_unref (file_t * file, off64_t offset);
 extern void * file_chunks_get_addr (file_t * file, off64_t offset);

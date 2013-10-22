@@ -20,7 +20,7 @@
 
 #include <metaresc.h>
 
-off64_t
+static off64_t
 chunk_get_id (const file_t * file, off64_t offset)
 {
   return (offset / file->chunk_size);

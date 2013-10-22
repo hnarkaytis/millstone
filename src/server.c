@@ -492,6 +492,41 @@ start_file_sync (void * arg)
   return (status);
 }
 
+static status_t
+retry_splitted_block (server_t * server, block_id_t * block_id)
+{
+  status_t status = ST_SUCCESS;
+#ifdef HAVE_ZLIB
+  if (server->compress_level > 0)
+    {
+      /* we need to split lost packets approximetly half-and-half */
+      size_t size = block_id->size;
+      int size_width = mtu_tune_get_width (size);
+      /* standard packets will have size of 2^N and
+	 will be splitted in two equal parts.
+	 Last block of file might have arbitrary size. */
+      if (size - (1 << (size_width - 1)) <= (1 << size_width))
+	--size_width;
+      /* do not split on blocks less then minimal size */
+      if (size_width < MIN_TRANSFER_BLOCK_SIZE_BITS)
+	size_width = MIN_TRANSFER_BLOCK_SIZE_BITS;
+      block_id->size = 1 << size_width;
+      /* send request for the first part */
+      status = send_block_request (server, block_id);
+      /* send request for the rest */
+      if ((ST_SUCCESS == status) && (size > (1 << size_width)))
+	{
+	  block_id->offset += 1 << size_width;
+	  block_id->size = size - (1 << size_width);
+	  status = send_block_request (server, block_id);
+	}
+    }
+  else
+#endif /* HAVE_ZLIB */
+    status = send_block_request (server, block_id);
+  return (status);
+}
+
 static void *
 delayed_blocks_handler (void * arg)
 {
@@ -524,7 +559,7 @@ delayed_blocks_handler (void * arg)
 
       mtu_tune_log (&blocks_trasfer->mtu_tune, timestamped_block.block_id.size, TRUE);
 	  
-      status = send_block_request (server, &timestamped_block.block_id);
+      status = retry_splitted_block (server, &timestamped_block.block_id);
       if (ST_SUCCESS != status)
 	break;
 

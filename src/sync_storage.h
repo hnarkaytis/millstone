@@ -7,18 +7,19 @@
 #include <millstone.h> /* status_t */
 
 #include <metaresc.h>
+#include <mr_ic.h>
 
-#define HASH_TABLE_SIZE (127)
+#define HASH_TABLE_SIZE (17)
 
-TYPEDEF_STRUCT (sync_rb_tree_t,
-		(mr_red_black_tree_node_t *, tree),
+TYPEDEF_STRUCT (sync_ic_t,
+		(mr_ic_t, mr_ic),
 		(pthread_mutex_t, mutex),
 		)
 
 TYPEDEF_FUNC (void, synchronized_matched_handler_t, (mr_ptr_t /* found */, mr_ptr_t /* searched */, void * /* context */))
 
 TYPEDEF_STRUCT (sync_storage_t,
-		(sync_rb_tree_t, table, [HASH_TABLE_SIZE]),
+		(sync_ic_t, table, [HASH_TABLE_SIZE]),
 		(char *, key_type),
 		(mr_compar_fn_t, compar_fn),
 		(mr_hash_fn_t, hash_fn),

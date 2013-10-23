@@ -208,6 +208,7 @@ void
 file_chunks_free (file_t * file)
 {
   sync_storage_yeld (&file->chunks_index, chunk_free);
+  sync_storage_free (&file->chunks_index);
 }
 
 void

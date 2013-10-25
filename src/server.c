@@ -1025,6 +1025,7 @@ run_server (config_t * config)
   
   close (server_ctx.data_sock);
   sync_storage_yeld (&server_ctx.clients, shutdown_server);
+  sync_storage_free (&server_ctx.clients);
   
   DEBUG_MSG ("Closed data socket. Exiting server.");
   

@@ -9,6 +9,7 @@
 #include <msg.h>
 #include <llist.h>
 #include <file_meta.h>
+#include <sync_storage.h>
 #include <client.h>
 
 #include <stddef.h> /* size_t, ssize_t */
@@ -210,9 +211,6 @@ client_cmd_writer (void * arg)
 static void
 dedup_add (sync_storage_t * sync_storage, block_digest_t * block_digest, int mem_threshold)
 {
-  if (mem_threshold >= 100)
-    return;
-  
   long avphys_pages = sysconf (_SC_AVPHYS_PAGES);
   static long phys_pages = 0;
 
@@ -302,22 +300,25 @@ digest_calculator (void * arg)
       DEBUG_MSG ("Block on offset %" SCNx64 " matched status %d.",
 		 msg.block_digest.block_id.offset, msg.block_matched.matched);
 
-      if (msg.block_matched.matched)
-	dedup_add (&client->dedup, &block_digest, client->connection->file->config->mem_threshold);
-      else
+      if (client->connection->file->config->mem_threshold < 100)
 	{
-	  mr_ptr_t * find = sync_storage_find (&client->dedup, &block_digest, NULL);
-	  block_id_t * matched_block_id = find ? find->ptr : NULL;
-	  if ((matched_block_id != NULL) && (matched_block_id->size == block_digest.block_id.size))
+	  if (msg.block_matched.matched)
+	    dedup_add (&client->dedup, &block_digest, client->connection->file->config->mem_threshold);
+	  else
 	    {
-	      msg.block_matched.duplicate = TRUE;
-	      msg.block_matched.duplicate_block_id = *matched_block_id;
-	    }
-	  else if (chunk != NULL)
-	    {
-	      chunk_dedup_t * chunk_dedup = chunk_dedup_find (&client->chunk_dedup, chunk);
-	      if (chunk_dedup != NULL)
-		dedup_add (&chunk_dedup->dedup, &block_digest, client->connection->file->config->mem_threshold);
+	      mr_ptr_t * find = sync_storage_find (&client->dedup, &block_digest, NULL);
+	      block_id_t * matched_block_id = find ? find->ptr : NULL;
+	      if ((matched_block_id != NULL) && (matched_block_id->size == block_digest.block_id.size))
+		{
+		  msg.block_matched.duplicate = TRUE;
+		  msg.block_matched.duplicate_block_id = *matched_block_id;
+		}
+	      else if (chunk != NULL)
+		{
+		  chunk_dedup_t * chunk_dedup = chunk_dedup_find (&client->chunk_dedup, chunk);
+		  if (chunk_dedup != NULL)
+		    dedup_add (&chunk_dedup->dedup, &block_digest, client->connection->file->config->mem_threshold);
+		}
 	    }
 	}
       
@@ -451,7 +452,8 @@ block_digest_register (const mr_ptr_t node, const void * context)
 {
   block_digest_t * block_digest = node.ptr;
   client_t * client = (client_t*)context;
-  dedup_add (&client->dedup, block_digest, client->connection->file->config->mem_threshold);
+  if (client->connection->file->config->mem_threshold < 100)
+    dedup_add (&client->dedup, block_digest, client->connection->file->config->mem_threshold);
   return (MR_SUCCESS);
 }
 
@@ -490,7 +492,6 @@ run_session (connection_t * connection)
   
   status = start_threads (digest_calculator, connection->file->config->workers_number, start_data_writer, &client);
 
-  file_chunks_free (connection->file);
   sync_storage_free (&client.chunk_dedup);
   sync_storage_free (&client.dedup);
 
@@ -498,6 +499,8 @@ run_session (connection_t * connection)
   llist_cancel (&client.cmd_in);
   llist_cancel (&client.cmd_out);
   
+  file_chunks_free (connection->file);
+
   DEBUG_MSG ("Session done.");
 
   return (status);

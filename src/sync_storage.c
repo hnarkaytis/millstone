@@ -36,7 +36,8 @@ sync_storage_del (sync_storage_t * sync_storage, mr_ptr_t mr_ptr, synchronized_m
       if (smh != NULL)
 	smh (found_node, mr_ptr, sync_storage->context);
       
-      mr_ic_del (&bucket->mr_ic, mr_ptr, sync_storage->context);
+      if (MR_SUCCESS != mr_ic_del (&bucket->mr_ic, found_node, sync_storage->context))
+	ERROR_MSG ("Failed to delete element that really exist.");
       if (sync_storage->free_fn != NULL)
 	sync_storage->free_fn (found_node, sync_storage->context);
       status = ST_SUCCESS;

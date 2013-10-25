@@ -120,7 +120,7 @@ chunk_release (file_t * file, chunk_t * chunk)
 {
   if (file->chunk_release)
     file->chunk_release (chunk, file->context);
-	  
+
   sync_storage_del (&file->chunks_index, chunk, NULL);
   munmap (chunk->data, chunk->block_id.size);
   chunk->data = NULL;

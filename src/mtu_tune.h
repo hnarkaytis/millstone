@@ -7,15 +7,19 @@
 #include <millstone.h> /* status_t */
 #include <block.h> /* block_t */
 
+#include <pthread.h>
+
 #include <metaresc.h>
 
 #define MAX_TRANSFER_BLOCK_SIZE_BITS (13)
 #define MIN_TRANSFER_BLOCK_SIZE_BITS (9)
 
 TYPEDEF_STRUCT (mtu_info_t,
+		(pthread_mutex_t, mutex),
 		uint64_t log,
 		int count_send_attempt,
 		int count_received,
+		int count_errors,
 		)
 
 TYPEDEF_STRUCT (mtu_tune_t,

@@ -65,8 +65,11 @@ bit_count (uint64_t value)
 void
 mtu_tune_init (mtu_tune_t * mtu_tune)
 {
+  int i;
   memset (mtu_tune, 0, sizeof (*mtu_tune));
   mtu_tune->current_mtu = mtu_tune_get_width (EXPECTED_PACKET_SIZE);
+  for (i = 0; i < sizeof (mtu_tune->mtu_info) / sizeof (mtu_tune->mtu_info[0]); ++i)
+    pthread_mutex_init (&mtu_tune->mtu_info[i].mutex, NULL);
   DUMP_VAR (mtu_tune_t, mtu_tune);
 }
 
@@ -81,19 +84,26 @@ mtu_tune_log (mtu_tune_t * mtu_tune, size_t size, bool failure)
     }
   mtu_info_t * mtu_info = &mtu_tune->mtu_info[mtu];
 
-  int log_idx = mtu_info->count_received++ & (CHAR_BIT * sizeof (mtu_info->log) - 1);
-  mtu_info->log &= ~(((uint64_t)1) << log_idx);
-  if (failure)
-    mtu_info->log |= ((uint64_t)1) << log_idx;
+  pthread_mutex_lock (&mtu_info->mutex);
+  uint64_t mask = ((uint64_t)1) << (mtu_info->count_received++ & (CHAR_BIT * sizeof (mtu_info->log) - 1));
+  if (!(mtu_info->log & mask) != !failure)
+    {
+      mtu_info->log ^= mask;
+      if (failure)
+	++mtu_info->count_errors;
+      else
+	--mtu_info->count_errors;
+    }
+  pthread_mutex_unlock (&mtu_info->mutex);
   
   if (mtu == mtu_tune->current_mtu)
     if (mtu_tune->current_mtu > MIN_TRANSFER_BLOCK_SIZE_BITS)
-      if (bit_count (mtu_info->log) > ((CHAR_BIT * sizeof (mtu_info->log)) >> 1))
+      if (mtu_info->count_errors > ((CHAR_BIT * sizeof (mtu_info->log)) >> 1))
 	--mtu_tune->current_mtu;
 
   if ((mtu == mtu_tune->current_mtu + 1) && !failure)
     if (mtu_tune->current_mtu < MAX_TRANSFER_BLOCK_SIZE_BITS)
-      if (bit_count (mtu_info->log) <= ((CHAR_BIT * sizeof (mtu_info->log)) >> 1))
+      if (mtu_info->count_errors <= ((CHAR_BIT * sizeof (mtu_info->log)) >> 1))
 	mtu_tune->current_mtu = mtu;
 }
 

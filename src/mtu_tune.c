@@ -94,6 +94,8 @@ mtu_tune_log (mtu_tune_t * mtu_tune, size_t size, bool failure)
       else
 	--mtu_info->count_errors;
     }
+  if (failure)
+    ++mtu_info->total_errors;
   pthread_mutex_unlock (&mtu_info->mutex);
   
   if (mtu == mtu_tune->current_mtu)

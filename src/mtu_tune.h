@@ -20,6 +20,7 @@ TYPEDEF_STRUCT (mtu_info_t,
 		int count_send_attempt,
 		int count_received,
 		int count_errors,
+		int total_errors,
 		)
 
 TYPEDEF_STRUCT (mtu_tune_t,

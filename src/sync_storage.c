@@ -62,7 +62,7 @@ void
 sync_storage_init (sync_storage_t * sync_storage, mr_compar_fn_t compar_fn, mr_hash_fn_t hash_fn, mr_free_fn_t free_fn, char * key_type, void * context)
 {
   int i;
-  memset (sync_storage, 0, sizeof (sync_storage));
+  memset (sync_storage, 0, sizeof (*sync_storage));
   for (i = 0; i < sizeof (sync_storage->table) / sizeof (sync_storage->table[0]); ++i)
     {
       mr_ic_new (&sync_storage->table[i].mr_ic, hash_fn, compar_fn, key_type, MR_IC_HASH_NEXT);

@@ -1,6 +1,10 @@
 #ifndef _MILLSTONE_H_
 #define _MILLSTONE_H_
 
+#ifndef _LARGEFILE64_SOURCE
+#define _LARGEFILE64_SOURCE
+#endif /* _LARGEFILE64_SOURCE */
+
 #include <sys/user.h> /* PAGE_SIZE */
 
 #include <metaresc.h>

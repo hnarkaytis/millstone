@@ -4,8 +4,8 @@
 AC_PREREQ([2.69])
 AC_INIT([Millstone - rsync for binary files], [0.1], [hnarkaytis@gmail.com])
 AM_INIT_AUTOMAKE([millstone], [1.0])
-AC_CONFIG_SRCDIR([src/millstone.c])
-AC_CONFIG_HEADERS([src/config.h])
+AC_CONFIG_SRCDIR([src32/millstone.c])
+AC_CONFIG_HEADERS([src32/config.h])
 
 # Checks for programs.
 AC_PROG_CC
@@ -54,5 +54,5 @@ AC_FUNC_ALLOCA
 AC_FUNC_MALLOC
 AC_CHECK_FUNCS([memset])
 
-AC_CONFIG_FILES([Makefile src/Makefile])
+AC_CONFIG_FILES([Makefile src32/Makefile])
 AC_OUTPUT

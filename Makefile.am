@@ -2,7 +2,7 @@
 
 ACLOCAL_AMFLAGS = -I m4
 
-SUBDIRS = src
+SUBDIRS = src32
 
 distclean-local:
 	find . "(" -name '*.gcda' -o -name '*.gcno' -o -name '*.gcov' ")" -delete

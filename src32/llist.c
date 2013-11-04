@@ -6,6 +6,13 @@
 #include <stdbool.h> /* TRUE, FALSE */
 #include <string.h> /* memset, memcpy */
 
+#include <metaresc.h>
+
+#undef MR_CHECK_TYPES
+#define MR_CHECK_TYPES(...)
+#undef MR_SAVE
+#define MR_SAVE MR_SAVE_STR_TYPED
+
 void
 llist_init (llist_t * llist, size_t elem_size, char * elem_type, size_t max_count)
 {
@@ -38,7 +45,6 @@ llist_push (llist_t * llist, void * elem)
     }
 
   llist_slot->ext.ptr = llist_slot->elem;
-  memcpy (llist_slot->elem, elem, llist->elem_size);
       
   pthread_mutex_lock (&llist->mutex);
   while ((llist->count == llist->max_count) && (!llist->cancel))
@@ -46,13 +52,20 @@ llist_push (llist_t * llist, void * elem)
       
   if (!llist->cancel)
     {
-      llist_slot->prev = &llist->queue;
-      llist_slot->next = llist->queue.next;
-      llist->queue.next->prev = llist_slot;
-      llist->queue.next = llist_slot;
-      status = ST_SUCCESS;
-      if (llist->count++ == 0)
-	pthread_cond_broadcast (&llist->empty);
+      memcpy (llist_slot->elem, elem, llist->elem_size);
+      if ((NULL != llist->elem_type) &&
+	  (MR_SUCCESS != MR_COPY_RECURSIVELY (llist->elem_type, elem, llist_slot->elem)))
+	status = ST_FAILURE;
+      else
+	{
+	  status = ST_SUCCESS;
+	  llist_slot->prev = &llist->queue;
+	  llist_slot->next = llist->queue.next;
+	  llist->queue.next->prev = llist_slot;
+	  llist->queue.next = llist_slot;
+	  if (llist->count++ == 0)
+	    pthread_cond_broadcast (&llist->empty);
+	}
     }
   pthread_mutex_unlock (&llist->mutex);
 
@@ -134,6 +147,8 @@ llist_cancel (llist_t * llist)
 	  llist_slot_t * llist_slot = llist->queue.prev;
 	  llist_slot->prev->next = &llist->queue;
 	  llist->queue.prev = llist_slot->prev;
+	  if (llist->elem_type)
+	    MR_FREE_RECURSIVELY (llist->elem_type, llist_slot->elem);
 	  MR_FREE (llist_slot);
 	  --llist->count;
 	}

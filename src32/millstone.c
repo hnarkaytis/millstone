@@ -22,6 +22,7 @@
 #endif /* HAVE_ZLIB */
 
 #define DEFAULT_MEM_THRESHOLD (100)
+#define DEFAULT_DATA_CONNECTIONS (4)
 
 status_t
 start_threads (void * (* handler) (void *), int count, status_t (*nested_handler) (void *), void * arg)
@@ -115,6 +116,7 @@ parse_args (int argc, char * argv[], config_t * config)
       {"compress", required_argument, NULL, 'c'},
       {"log-level", required_argument, NULL, 'l'},
       {"memory-threshold", required_argument, NULL, 'm'},
+      {"data-connections", required_argument, NULL, 'd'},
       {0, 0, 0, 0}
     };
   /* `getopt_long' stores the option index here. */
@@ -125,9 +127,10 @@ parse_args (int argc, char * argv[], config_t * config)
   config->dst_port = DEFAULT_LISTEN_PORT;
   config->mem_threshold = DEFAULT_MEM_THRESHOLD;
   config->compress_level = DEFAULT_COMPRESS_LEVEL;
+  config->data_connections = DEFAULT_DATA_CONNECTIONS;
   config->workers_number = get_cores ();
   
-  while ((c = getopt_long (argc, argv, "c:l:w:m:", long_options, &option_index)) != -1)
+  while ((c = getopt_long (argc, argv, "c:l:w:m:d:", long_options, &option_index)) != -1)
     switch (c)
       {
       case 0:
@@ -154,6 +157,11 @@ parse_args (int argc, char * argv[], config_t * config)
 	if (optarg)
 	  config->mem_threshold = atoi (optarg);
 	break;
+
+      case 'd':
+	if (optarg)
+	  config->data_connections = atoi (optarg);
+	break;
 	
       case 'l':
 	{
@@ -172,14 +180,14 @@ parse_args (int argc, char * argv[], config_t * config)
   
   if (argc - optind == 0)
     config->run_mode = RM_SERVER;
-  else if (argc - optind == 2)
+  else if (argc - optind >= 2)
     {
-      char * dst = argv[optind + 1];
+      char * dst = argv[optind];
       char * semicollon = strchr (dst, ':');
       char * slash = strchr (dst, '/');
 
       config->run_mode = RM_CLIENT;
-      config->src_file = argv[optind];
+      config->src_files = &argv[optind + 1];
       config->dst_host = dst;
 
       if (slash)
@@ -188,7 +196,7 @@ parse_args (int argc, char * argv[], config_t * config)
 	  *slash = 0;
 	}
       else
-	config->dst_file = config->src_file;
+	config->dst_file = config->src_files[0];
       
       if (semicollon)
 	{
@@ -215,7 +223,7 @@ int main (int argc, char * argv[])
 {
   config_t config;
 
-  DEBUG_MSG ("Start Millstone. Parse params.");
+  TRACE_MSG ("Start Millstone. Parse params.");
   
   status_t status = parse_args (argc, argv, &config);
   if (ST_SUCCESS != status)
@@ -236,7 +244,7 @@ int main (int argc, char * argv[])
       break;
     }
   
-  DEBUG_MSG ("Stop Millstone.");
+  TRACE_MSG ("Stop Millstone.");
 
   return ((ST_SUCCESS != status) ? EXIT_FAILURE : EXIT_SUCCESS);
 }

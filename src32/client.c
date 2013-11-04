@@ -628,10 +628,10 @@ run_client (config_t * config)
 
   memset (&file, 0, sizeof (file));
   file.config = config;
-  file.fd = open64 (config->src_file, O_RDONLY);
+  file.fd = open64 (config->src_files[0], O_RDONLY);
   if (file.fd <= 0)
     {
-      FATAL_MSG ("Can't open source file '%s'.", config->src_file);
+      FATAL_MSG ("Can't open source file '%s'.", config->src_files[0]);
       return (ST_FAILURE);
     }
 

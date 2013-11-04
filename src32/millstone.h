@@ -21,7 +21,7 @@ TYPEDEF_ENUM (run_mode_t, RM_SERVER, RM_CLIENT)
 
 TYPEDEF_STRUCT (config_t,
 		(run_mode_t, run_mode),
-		string_t src_file,
+		(char **, src_files),
 		string_t dst_file,
 		string_t dst_host,
 		int dst_port,
@@ -29,6 +29,7 @@ TYPEDEF_STRUCT (config_t,
 		int mem_threshold,
 		int32_t compress_level,
 		int workers_number,
+		int data_connections,
 		)
 
 #define DUMP_VAR_(OUTPUT_MSG, TYPE, VAR) ({			\

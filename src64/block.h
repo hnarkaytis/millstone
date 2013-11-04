@@ -16,7 +16,7 @@
 
 TYPEDEF_STRUCT (block_id_t,
 		(off64_t, offset),
-		(uint32_t, size),
+		(uint64_t, size),
 		(file_id_t, file_id),
 		)
 

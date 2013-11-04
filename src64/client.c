@@ -65,7 +65,10 @@ client_main_loop (void * arg)
     {
       fd_t * fd = client_open_file (&client->file_pool, *src_file);
       if (NULL == fd)
-	continue;
+	{
+	  WARN_MSG ("Can't open file '%s'.", *src_file);
+	  continue;
+	}
 
       TRACE_MSG ("Opened file '%s'.", *src_file);
       
@@ -162,7 +165,7 @@ start_file_sync (client_t * client, file_id_t * file_id)
   fd_t * fd = file_pool_get_fd (&client->file_pool, file_id);
   if (NULL == fd)
     return (ST_FAILURE);
-  
+
   memset (&task, 0, sizeof (task));
   task.block_id.offset = 0;
   task.block_id.size = fd->file.size;
@@ -228,6 +231,7 @@ client_cmd_reader (void * arg)
 	  status = file_transfer (client, &msg.file_id);
 	  break;
 	case MT_OPEN_FILE_FAILURE:
+	  WARN_MSG ("Server failed to open file.");
 	  status = file_unref (client, &msg.file_id);
 	  break;
 	default:

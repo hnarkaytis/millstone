@@ -2,6 +2,9 @@
 /Makefile.am
 /Makefile.in
 /client.h
+/client.o
+/connection.o
+/file_pool.o
 /llist.c
 /llist.h
 /llist.o
@@ -12,7 +15,9 @@
 /millstone.c
 /millstone.h
 /millstone.o
+/msg.o
 /server.h
+/server.o
 /stub.c
 /stub.o
 /sync_storage.c

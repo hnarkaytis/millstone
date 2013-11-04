@@ -14,7 +14,7 @@
 #include <openssl/sha.h> /* SHA_DIGEST_LENGTH */
 #include <metaresc.h>
 
-TYPEDEF_STRUCT (block_id_t,
+TYPEDEF_STRUCT (block_id_t, ATTRIBUTES (__attribute__((packed))),
 		(off64_t, offset),
 		(uint64_t, size),
 		(file_id_t, file_id),

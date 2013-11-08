@@ -33,19 +33,114 @@ TYPEDEF_STRUCT (task_t,
 		(block_id_t, block_id),
 		)
 
+TYPEDEF_STRUCT (pqueue_t,
+		(pthread_mutex_t, mutex),
+		(pthread_cond_t, cond),
+		(bool, cancel),
+		RARRAY (task_t, heap),
+		)
+
 TYPEDEF_STRUCT (client_t,
 		(connection_t *, connection),
 		(file_pool_t, file_pool),
-		(llist_t, tasks),
+		(pqueue_t, tasks),
 		(llist_t, blocks),
 		)
+
+static void
+pqueue_init (pqueue_t * pqueue)
+{
+  memset (pqueue, 0, sizeof (*pqueue));
+  pthread_mutex_init (&pqueue->mutex, NULL);
+  pthread_cond_init (&pqueue->cond, NULL);
+}
+
+static void
+pqueue_cancel (pqueue_t * pqueue)
+{
+  pthread_mutex_lock (&pqueue->mutex);
+  pqueue->cancel = TRUE;
+  if (pqueue->heap.data)
+    MR_FREE (pqueue->heap.data);
+  pqueue->heap.data = NULL;
+  pqueue->heap.size = 0;
+  pqueue->heap.alloc_size = 0;
+  pthread_cond_broadcast (&pqueue->cond);
+  pthread_mutex_unlock (&pqueue->mutex);
+}
+
+static status_t
+pqueue_push (pqueue_t * pqueue, task_t * task)
+{
+  status_t status = ST_SUCCESS;
+  pthread_mutex_lock (&pqueue->mutex);
+  if (pqueue->cancel)
+    status = ST_FAILURE;
+  else
+    {
+      int idx = pqueue->heap.size / sizeof (pqueue->heap.data[0]);
+      task_t * add = mr_rarray_append ((void*)&pqueue->heap, sizeof (pqueue->heap.data[0]));
+      if (NULL == add)
+	status = ST_FAILURE;
+      else
+	{
+	  *add = *task;
+	  if (0 == idx)
+	    pthread_cond_broadcast (&pqueue->cond);
+	      
+	  while (idx > 0)
+	    {
+	      int parent = (idx - 1) >> 1;
+	      if (pqueue->heap.data[parent].size <= pqueue->heap.data[idx].size)
+		break;
+	      pqueue->heap.data[idx] = pqueue->heap.data[parent];
+	      idx = parent;
+	    }
+	}
+    }
+  pthread_mutex_unlock (&pqueue->mutex);
+  return (status);
+}
+
+static status_t
+pqueue_pop (pqueue_t * pqueue, task_t * task)
+{
+  status_t status = ST_SUCCESS;
+  pthread_mutex_lock (&pqueue->mutex);
+  while ((0 == pqueue->heap.size) && (!pqueue->cancel))
+    pthread_cond_wait (&pqueue->cond, &pqueue->mutex);
+  
+  if (pqueue->cancel)
+    status = ST_FAILURE;
+  else
+    {
+      *task = pqueue->heap.data[0];
+      pqueue->heap.size -= sizeof (pqueue->heap.data[0]);
+      int heap_size = pqueue->heap.size / sizeof (pqueue->heap.data[0]);
+      pqueue->heap.data[0] = pqueue->heap.data[heap_size];
+      int idx = 0;
+      for (;;)
+	{
+	  int child = (idx << 1) + 1;
+	  if (child >= heap_size)
+	    break;
+	  if ((child + 1 < heap_size) &&
+	      (pqueue->heap.data[child + 1].size < pqueue->heap.data[child].size))
+	    ++child;
+	  if (pqueue->heap.data[idx].size <= pqueue->heap.data[child].size)
+	    break;
+	}
+    }
+  pthread_mutex_unlock (&pqueue->mutex);
+  return (status);
+}
 
 static void
 cancel_client (client_t * client)
 {
   file_pool_cancel (&client->file_pool);
   connection_cancel (client->connection);
-  llist_cancel (&client->tasks);
+  pqueue_cancel (&client->tasks);
   llist_cancel (&client->blocks);
 }
 
@@ -151,7 +246,7 @@ msg_block_matched (client_t * client, block_matched_t * block_matched)
 	  for (task.size = MIN_BLOCK_SIZE;
 	       task.size * SPLIT_RATIO < block_matched->block_id.size;
 	       task.size *= SPLIT_RATIO);
-	  status = llist_push (&client->tasks, &task);
+	  status = pqueue_push (&client->tasks, &task);
 	}
     }
   
@@ -171,7 +266,7 @@ start_file_sync (client_t * client, file_id_t * file_id)
   task.block_id.size = fd->file.size;
   task.block_id.file_id = fd->file.file_id;
   task.size = MAX_BLOCK_SIZE;
-  return (llist_push (&client->tasks, &task));
+  return (pqueue_push (&client->tasks, &task));
 }
 
 static status_t
@@ -262,7 +357,7 @@ client_worker (void * arg)
   
   for (;;)
     {
-      status_t status = llist_pop (&client->tasks, &task);
+      status_t status = pqueue_pop (&client->tasks, &task);
       if (ST_SUCCESS != status)
 	break;
       
@@ -435,7 +530,7 @@ start_client (connection_t * connection)
   memset (&client, 0, sizeof (client));
   client.connection = connection;
   file_pool_init (&client.file_pool);
-  LLIST_INIT (&client.tasks, task_t, -1);
+  pqueue_init (&client.tasks);
   LLIST_INIT (&client.blocks, block_id_t, -1);
 
   status_t status = init_cmd_session (connection->cmd_fd);

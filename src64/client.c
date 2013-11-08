@@ -29,8 +29,8 @@
 #define MIN_BLOCK_SIZE (PAGE_SIZE << 3)
 
 TYPEDEF_STRUCT (task_t,
-		(block_id_t, block_id),
 		(size_t, size),
+		(block_id_t, block_id),
 		)
 
 TYPEDEF_STRUCT (client_t,
@@ -188,6 +188,7 @@ file_transfer (client_t * client, file_id_t * file_id)
   memset (&block_id, 0, sizeof (block_id));
   block_id.file_id = *file_id;
   block_id.size = MIN_BLOCK_SIZE;
+  client->blocks.max_count = client->connection->config->data_connections; /* make a fixed size queue */
     
   for (block_id.offset = 0; block_id.offset < fd->file.size; block_id.offset += block_id.size)
     {

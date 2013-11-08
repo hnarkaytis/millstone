@@ -39,7 +39,7 @@ file_pool_init (file_pool_t * file_pool)
   memset (file_pool, 0, sizeof (*file_pool));
   file_pool->file_id.id = 0;
 
-  sync_storage_init (&file_pool->fd_map, fd_compar, fd_hash, NULL, "fd_t", &file_pool);
+  sync_storage_init (&file_pool->fd_map, fd_compar, fd_hash, NULL, "fd_t", file_pool);
   LLIST_INIT (&file_pool->pool, fd_ptr_t, count);
   for (i = 0; i < count; ++i)
     {

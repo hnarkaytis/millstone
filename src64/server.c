@@ -41,6 +41,9 @@ TYPEDEF_STRUCT (server_t,
 		(connection_t *, connection),
 		(file_pool_t, file_pool),
 		(llist_t, cmd_in),
+		(pthread_mutex_t, mutex),
+		(pthread_cond_t, cond),
+		(int, ref_count),
 		)
 
 TYPEDEF_STRUCT (accepter_ctx_t,
@@ -242,6 +245,16 @@ server_worker (void * arg)
   return (NULL);
 }
 
+static void
+wait_ref_zero (mr_ptr_t found, mr_ptr_t serched, void * context)
+{
+  server_t * server = found.ptr;
+  pthread_mutex_lock (&server->mutex);
+  while (server->ref_count != 0)
+    pthread_cond_wait (&server->cond, &server->mutex);
+  pthread_mutex_unlock (&server->mutex);
+}
+
 static status_t
 start_new_server (accepter_ctx_t * accepter_ctx)
 {
@@ -266,6 +279,9 @@ start_new_server (accepter_ctx_t * accepter_ctx)
   server_t server;
   memset (&server, 0, sizeof (server));
   server.connection = &connection;
+  server.ref_count = 0;
+  pthread_mutex_init (&server.mutex, NULL);
+  pthread_cond_init (&server.cond, NULL);
 
   file_pool_init (&server.file_pool);
   LLIST_INIT (&server.cmd_in, msg_t, -1);
@@ -278,7 +294,7 @@ start_new_server (accepter_ctx_t * accepter_ctx)
       status = msg_send (connection.cmd_fd, &msg);
       if (ST_SUCCESS == status)
 	status = start_threads (server_worker, server.connection->config->workers_number, start_cmd_writer, &server);
-      sync_storage_del (&accepter_ctx->server_ctx->clients, &server, NULL);
+      sync_storage_del (&accepter_ctx->server_ctx->clients, &server, wait_ref_zero);
     }
   
   llist_cancel (&server.cmd_in);
@@ -321,6 +337,24 @@ data_connection_worker (server_t * server, int data_fd)
   return (status);
 }
 
+static void
+ref_server (mr_ptr_t found, mr_ptr_t serched, void * context)
+{
+  server_t * server = found.ptr;
+  pthread_mutex_lock (&server->mutex);
+  ++server->ref_count;
+  pthread_mutex_unlock (&server->mutex);
+}
+
+static void
+unref_server (server_t * server)
+{
+  pthread_mutex_lock (&server->mutex);
+  if (0 == --server->ref_count)
+    pthread_cond_broadcast (&server->cond);
+  pthread_mutex_unlock (&server->mutex);
+}
+
 static status_t
 start_new_data_connection (accepter_ctx_t * accepter_ctx, client_id_t * client_id)
 {
@@ -334,13 +368,16 @@ start_new_data_connection (accepter_ctx_t * accepter_ctx, client_id_t * client_i
 
   TRACE_MSG ("Data connection for client from %08x:%04x.", connection.remote.sin_addr.s_addr, connection.remote.sin_port);
   
-  mr_ptr_t * find = sync_storage_find (&accepter_ctx->server_ctx->clients, &server, NULL);
+  mr_ptr_t * find = sync_storage_find (&accepter_ctx->server_ctx->clients, &server, ref_server);
   if (NULL == find)
     return (ST_FAILURE);
 
   TRACE_MSG ("Client from %08x:%04x found.", connection.remote.sin_addr.s_addr, connection.remote.sin_port);
+
+  status_t status = data_connection_worker (find->ptr, accepter_ctx->fd);
+  unref_server (find->ptr);
   
-  return (data_connection_worker (find->ptr, accepter_ctx->fd));
+  return (status);
 }
 
 static void *

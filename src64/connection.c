@@ -4,8 +4,11 @@
 #include <millstone.h> /* status_t */
 
 #include <string.h> /* memset, strerror */
+#include <sys/socket.h> /* shutdown */
 
-#include <millstone.h>
+#include <pthread.h>
+
+#include <metaresc.h>
 
 status_t
 connection_cmd_writer (connection_t * connection)

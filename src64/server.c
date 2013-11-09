@@ -3,13 +3,13 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif /* HAVE_CONFIG_H */
-#include <millstone.h>
-#include <logging.h>
-#include <block.h>
-#include <connection.h>
-#include <file.h>
-#include <msg.h>
-#include <sync_storage.h>
+#include <millstone.h> /* config_t, status_t */
+#include <logging.h> /* *_MSG */
+#include <block.h> /* block_id_t */
+#include <connection.h> /* connection_t */
+#include <file.h> /* file_id_t */
+#include <msg.h> /* msg_t */
+#include <sync_storage.h> /* sync_storage_t */
 #include <llist.h> /* llist_t */
 #include <file_pool.h> /* file_pool_t */
 #include <client.h> /* client_id_t */
@@ -19,17 +19,16 @@
 #include <signal.h> /* signal, SIG_IGN, SIGPIPE */
 #include <unistd.h> /* TEMP_FAILURE_RETRY, close */
 #include <inttypes.h> /* SCNx64 */
-#include <string.h> /* memcpy, strerror */
+#include <string.h> /* memset, strerror */
 #include <errno.h> /* errno */
-#include <limits.h> /* CHAR_BIT */
-#include <time.h> /* struct timespec */
-#include <sys/time.h> /* struct timeval */
-#include <sys/mman.h> /* mmap64, unmap */
-#include <sys/socket.h> /* setsockopt */
+#include <netinet/in.h> /* htonl, struct sockaddr_in, INADDR_ANY */
+#include <sys/socket.h> /* socklen_t, socket, setsockopt, getsockname, bind, accept, listen, shutdown */
 #include <netinet/tcp.h> /* TCP_NODELAY */
 
 #include <openssl/sha.h> /* SHA1 */
 #include <pthread.h>
+
+#include <metaresc.h>
 
 TYPEDEF_STRUCT (server_ctx_t,
 		(config_t *, config),
@@ -338,9 +337,8 @@ data_connection_worker (server_t * server, int data_fd)
 }
 
 static void
-ref_server (mr_ptr_t found, mr_ptr_t serched, void * context)
+ref_server (server_t * server)
 {
-  server_t * server = found.ptr;
   pthread_mutex_lock (&server->mutex);
   ++server->ref_count;
   pthread_mutex_unlock (&server->mutex);
@@ -353,6 +351,12 @@ unref_server (server_t * server)
   if (0 == --server->ref_count)
     pthread_cond_broadcast (&server->cond);
   pthread_mutex_unlock (&server->mutex);
+}
+
+static void
+server_found (mr_ptr_t found, mr_ptr_t serched, void * context)
+{
+  ref_server (found.ptr);
 }
 
 static status_t
@@ -368,7 +372,7 @@ start_new_data_connection (accepter_ctx_t * accepter_ctx, client_id_t * client_i
 
   TRACE_MSG ("Data connection for client from %08x:%04x.", connection.remote.sin_addr.s_addr, connection.remote.sin_port);
   
-  mr_ptr_t * find = sync_storage_find (&accepter_ctx->server_ctx->clients, &server, ref_server);
+  mr_ptr_t * find = sync_storage_find (&accepter_ctx->server_ctx->clients, &server, server_found);
   if (NULL == find)
     return (ST_FAILURE);
 
@@ -399,7 +403,6 @@ handle_client (void * arg)
 	{
 	case MT_CMD_CONNECTION_START:
 	  start_new_server (&accepter_ctx);
-	  //shutdown (accepter_ctx.server_ctx->server_sock, SD_BOTH);
 	  break;
 	case MT_DATA_CONNECTION_START:
 	  start_new_data_connection (&accepter_ctx, &msg.client_id);

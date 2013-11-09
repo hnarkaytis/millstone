@@ -9,7 +9,7 @@
 
 #include <pthread.h> /* pthread_mutex_t */
 
-#define FILE_POOL_SIZE (8)
+#define FILE_POOL_SIZE (4)
 
 TYPEDEF_STRUCT (fd_t,
 		(file_t, file),
@@ -38,6 +38,5 @@ extern void file_pool_cleanup (file_pool_t * file_pool);
 extern void file_sent_block (fd_t * fd);
 extern fd_t * file_pool_get_fd (file_pool_t * file_pool, file_id_t * file_id);
 extern void file_pool_finalize (file_pool_t * file_pool);
-
 
 #endif /* _FILE_POOL_H_ */

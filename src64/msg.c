@@ -5,7 +5,8 @@
 #include <msg.h> /* msg_t */
 
 #include <stddef.h> /* size_t, ssize_t */
-#include <unistd.h> /* TEMP_FAILURE_RETRY */
+#include <string.h> /* memset */
+#include <unistd.h> /* TEMP_FAILURE_RETRY, read */
 #include <errno.h> /* errno for TEMP_FAILURE_RETRY */
 #include <sys/uio.h> /* writev, struct iovec */
 
@@ -19,6 +20,7 @@
 #define SERIALIZE MR_SAVE_XDR_RA
 #define DESERIALIZE MR_LOAD_XDR_RA
 #endif
+
 status_t
 buf_recv (int fd, void * buf, size_t size)
 {

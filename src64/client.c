@@ -3,8 +3,8 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif /* HAVE_CONFIG_H */
-#include <millstone.h> /* config_t */
-#include <logging.h>
+#include <millstone.h> /* config_t, status_t */
+#include <logging.h> /* *_MSG */
 #include <file.h> /* file_id_t */
 #include <block.h> /* block_id_t */
 #include <connection.h> /* connection_t */
@@ -13,13 +13,17 @@
 #include <client.h>
 
 #include <stddef.h> /* size_t, ssize_t */
-#include <unistd.h> /* TEMP_FAILURE_RETRY */
+#include <unistd.h> /* TEMP_FAILURE_RETRY, close */
+#include <stdbool.h> /* bool */
+#include <inttypes.h> /* int64_t, SCN* */
+#include <fcntl.h> /* off64_t */
 #include <errno.h> /* errno */
 #include <string.h> /* memset, strerror */
 #include <netdb.h> /* gethostbyname */
-#include <netinet/in.h> /* htonl, struct sockaddr_in */
-#include <netinet/tcp.h> /* TCP_NODELAY */
-#include <sys/uio.h> /* writev, struct iovec */
+#include <netinet/in.h> /* htonl, struct sockaddr_in, INADDR_ANY */
+#include <netinet/tcp.h> /* TCP_NODELAY, TCP_CORK */
+#include <sys/socket.h> /* socklen_t, socket, setsockopt, getsockname, connect, shutdown */
+#include <sys/uio.h> /* struct iovec */
 #include <sys/sendfile.h> /* sendfile64 */
 
 #include <openssl/sha.h> /* SHA1 */
@@ -72,19 +76,17 @@ pqueue_cancel (pqueue_t * pqueue)
 static status_t
 pqueue_push (pqueue_t * pqueue, task_t * task)
 {
-  status_t status = ST_SUCCESS;
+  status_t status = ST_FAILURE;
   pthread_mutex_lock (&pqueue->mutex);
-  if (pqueue->cancel)
-    status = ST_FAILURE;
-  else
+  if (!pqueue->cancel)
     {
-      int idx = pqueue->heap.size / sizeof (pqueue->heap.data[0]);
       task_t * add = mr_rarray_append ((void*)&pqueue->heap, sizeof (pqueue->heap.data[0]));
-      if (NULL == add)
-	status = ST_FAILURE;
-      else
+      if (NULL != add)
 	{
+	  status = ST_SUCCESS;
 	  *add = *task;
+	  
+	  int idx = pqueue->heap.size / sizeof (pqueue->heap.data[0]) - 1;
 	  if (0 == idx)
 	    pthread_cond_broadcast (&pqueue->cond);
 	      
@@ -105,15 +107,14 @@ pqueue_push (pqueue_t * pqueue, task_t * task)
 static status_t
 pqueue_pop (pqueue_t * pqueue, task_t * task)
 {
-  status_t status = ST_SUCCESS;
+  status_t status = ST_FAILURE;
   pthread_mutex_lock (&pqueue->mutex);
   while ((0 == pqueue->heap.size) && (!pqueue->cancel))
     pthread_cond_wait (&pqueue->cond, &pqueue->mutex);
   
-  if (pqueue->cancel)
-    status = ST_FAILURE;
-  else
+  if (!pqueue->cancel)
     {
+      status = ST_SUCCESS;
       *task = pqueue->heap.data[0];
       pqueue->heap.size -= sizeof (pqueue->heap.data[0]);
       int heap_size = pqueue->heap.size / sizeof (pqueue->heap.data[0]);

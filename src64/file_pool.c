@@ -7,8 +7,11 @@
 #include <file_pool.h>
 
 #include <errno.h> /* errno */
+#include <string.h> /* memset, strerror */
+#include <fcntl.h> /* open64 */
+#include <inttypes.h> /* int64_t, SCNx64 */
 #include <unistd.h> /* close, lseek64, SEEK_END */
-#include <sys/mman.h> /* mmap64, unmap */
+#include <sys/mman.h> /* mmap64, munmap */
 
 TYPEDEF_UNION (fd_ptr_t,
 	       ATTRIBUTES (, "this type should not be copied by MR_COPY_RECURSIVELY, but pointers should be resolved for existing objects"),
@@ -101,7 +104,7 @@ server_open_file (file_pool_t * file_pool, file_t * file)
   fd_ptr.fd->file = *file;
   fd_ptr.fd->fd = fd;
   fd_ptr.fd->data = NULL;
-  unsigned char * data = mmap64 (NULL, fd_ptr.fd->file.size, PROT_WRITE, MAP_SHARED, fd, 0);
+  unsigned char * data = mmap64 (NULL, fd_ptr.fd->file.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if (-1 == (long)data)
     {
       FATAL_MSG ("Failed to map file `%s` into memory. Error (%d) %s.", file->file_name, errno, strerror (errno));

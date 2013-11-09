@@ -10,7 +10,7 @@
 #include <client.h> /* client_id_t */
 
 #include <stddef.h> /* size_t, ssize_t */
-#include <sys/uio.h> /* writev, struct iovec */
+#include <sys/uio.h> /* struct iovec */
 
 #include <metaresc.h>
 

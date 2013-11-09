@@ -428,7 +428,10 @@ send_block (client_t * client, int data_fd, block_id_t block_id)
   fd_t * fd = file_pool_get_fd (&client->file_pool, &block_id.file_id);
   if (NULL == fd)
     return (ST_SUCCESS);
-      
+
+  int state = !0;
+  setsockopt (data_fd, IPPROTO_TCP, TCP_CORK, &state, sizeof(state));
+
   struct iovec iov[] = { { .iov_base = &block_id, .iov_len = sizeof (block_id), } };
   if (ST_SUCCESS != buf_send (data_fd, iov, sizeof (iov) / sizeof (iov[0])))
     return (ST_FAILURE);
@@ -441,6 +444,9 @@ send_block (client_t * client, int data_fd, block_id_t block_id)
       block_id.offset += rv;
       block_id.size -= rv;
     }
+
+  state = 0;
+  setsockopt (data_fd, IPPROTO_TCP, TCP_CORK, &state, sizeof(state));
 
   file_sent_block (fd);
   return (file_unref (client, &block_id.file_id));

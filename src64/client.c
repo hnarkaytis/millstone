@@ -37,12 +37,25 @@
 #define SPLIT_RATIO (1 << 10)
 #define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO)
 
+TYPEDEF_STRUCT (task_t,
+		(size_t, size),
+		(block_id_t, block_id),
+		)
+
 TYPEDEF_STRUCT (client_t,
 		(connection_t *, connection),
 		(file_pool_t, file_pool),
 		(pqueue_t, tasks),
 		(llist_t, blocks),
 		)
+
+static int
+task_compar (const mr_ptr_t x, const mr_ptr_t y, const void * context)
+{
+  const task_t * task_x = x.ptr;
+  const task_t * task_y = y.ptr;
+  return ((task_x->size > task_y->size) - (task_x->size < task_y->size));
+}
 
 static void
 cancel_client (client_t * client)
@@ -445,7 +458,7 @@ start_client (connection_t * connection)
   memset (&client, 0, sizeof (client));
   client.connection = connection;
   file_pool_init (&client.file_pool);
-  pqueue_init (&client.tasks);
+  pqueue_init (&client.tasks, sizeof (task_t), "task_t", task_compar, &client);
   LLIST_INIT (&client.blocks, block_id_t, -1);
 
   status_t status = init_cmd_session (connection->cmd_fd);

@@ -9,19 +9,36 @@
 
 #include <metaresc.h>
 
+#undef MR_CHECK_TYPES
+#define MR_CHECK_TYPES(...)
+#undef MR_SAVE
+#define MR_SAVE MR_SAVE_STR_TYPED
+
 void
-pqueue_init (pqueue_t * pqueue)
+pqueue_init (pqueue_t * pqueue, size_t elem_size, char * elem_type, mr_compar_fn_t compar_fn, void * context)
 {
   memset (pqueue, 0, sizeof (*pqueue));
   pthread_mutex_init (&pqueue->mutex, NULL);
   pthread_cond_init (&pqueue->cond, NULL);
+  pqueue->elem_size = elem_size;
+  pqueue->elem_type = elem_type;
+  pqueue->compar_fn = compar_fn;
+  pqueue->context = context;
 }
 
 void
 pqueue_cancel (pqueue_t * pqueue)
 {
+  int i;
+  
   pthread_mutex_lock (&pqueue->mutex);
   pqueue->cancel = TRUE;
+  for (i = pqueue->heap.size / sizeof (pqueue->heap.data[0]) - 1; i >= 0; --i)
+    {
+      if (pqueue->elem_type)
+	MR_FREE_RECURSIVELY (pqueue->elem_type, pqueue->heap.data[i].ptr);
+      MR_FREE (pqueue->heap.data[i].ptr);
+    }
   if (pqueue->heap.data)
     MR_FREE (pqueue->heap.data);
   pqueue->heap.data = NULL;
@@ -32,38 +49,53 @@ pqueue_cancel (pqueue_t * pqueue)
 }
 
 status_t
-pqueue_push (pqueue_t * pqueue, task_t * task)
+pqueue_push (pqueue_t * pqueue, void * elem)
 {
   status_t status = ST_FAILURE;
+  void * slot = MR_MALLOC (pqueue->elem_size);
+  if (NULL == slot)
+    return (status);
+  memcpy (slot, elem, pqueue->elem_size);
+  
   pthread_mutex_lock (&pqueue->mutex);
   if (!pqueue->cancel)
     {
-      task_t * add = mr_rarray_append ((void*)&pqueue->heap, sizeof (pqueue->heap.data[0]));
+      mr_ptr_t * add = mr_rarray_append ((void*)&pqueue->heap, sizeof (pqueue->heap.data[0]));
       if (NULL != add)
 	{
-	  status = ST_SUCCESS;
-	  *add = *task;
-	  
-	  int idx = pqueue->heap.size / sizeof (pqueue->heap.data[0]) - 1;
-	  if (0 == idx)
-	    pthread_cond_broadcast (&pqueue->cond);
-	      
-	  while (idx > 0)
+	  if ((NULL != pqueue->elem_type) &&
+	      (MR_SUCCESS != MR_COPY_RECURSIVELY (pqueue->elem_type, elem, slot)))
+	    pqueue->heap.size -= sizeof (pqueue->heap.data[0]);
+	  else
 	    {
-	      int parent = (idx - 1) >> 1;
-	      if (pqueue->heap.data[parent].size <= pqueue->heap.data[idx].size)
-		break;
-	      pqueue->heap.data[idx] = pqueue->heap.data[parent];
-	      idx = parent;
+	      status = ST_SUCCESS;
+	      add->ptr = slot;
+	  
+	      int idx = pqueue->heap.size / sizeof (pqueue->heap.data[0]) - 1;
+	      if (0 == idx)
+		pthread_cond_broadcast (&pqueue->cond);
+	      
+	      while (idx > 0)
+		{
+		  int parent = (idx - 1) >> 1;
+		  if (pqueue->compar_fn (pqueue->heap.data[parent], pqueue->heap.data[idx], pqueue->context) <= 0)
+		    break;
+		  pqueue->heap.data[idx] = pqueue->heap.data[parent];
+		  idx = parent;
+		}
 	    }
 	}
     }
   pthread_mutex_unlock (&pqueue->mutex);
+
+  if (ST_SUCCESS != status)
+    MR_FREE (slot);
+  
   return (status);
 }
 
 status_t
-pqueue_pop (pqueue_t * pqueue, task_t * task)
+pqueue_pop (pqueue_t * pqueue, void * elem)
 {
   status_t status = ST_FAILURE;
   pthread_mutex_lock (&pqueue->mutex);
@@ -73,7 +105,7 @@ pqueue_pop (pqueue_t * pqueue, task_t * task)
   if (!pqueue->cancel)
     {
       status = ST_SUCCESS;
-      *task = pqueue->heap.data[0];
+      memcpy (elem, pqueue->heap.data[0].ptr, pqueue->elem_size);
       pqueue->heap.size -= sizeof (pqueue->heap.data[0]);
       int heap_size = pqueue->heap.size / sizeof (pqueue->heap.data[0]);
       pqueue->heap.data[0] = pqueue->heap.data[heap_size];
@@ -84,9 +116,9 @@ pqueue_pop (pqueue_t * pqueue, task_t * task)
 	  if (child >= heap_size)
 	    break;
 	  if ((child + 1 < heap_size) &&
-	      (pqueue->heap.data[child + 1].size < pqueue->heap.data[child].size))
+	      (pqueue->compar_fn (pqueue->heap.data[child + 1], pqueue->heap.data[child], pqueue->context) <= 0))
 	    ++child;
-	  if (pqueue->heap.data[idx].size <= pqueue->heap.data[child].size)
+	  if (pqueue->compar_fn (pqueue->heap.data[idx], pqueue->heap.data[child], pqueue->context) <= 0)
 	    break;
 	}
     }

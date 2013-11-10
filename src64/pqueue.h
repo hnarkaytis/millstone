@@ -10,21 +10,20 @@
 
 #include <metaresc.h>
 
-TYPEDEF_STRUCT (task_t,
-		(size_t, size),
-		(block_id_t, block_id),
-		)
-
 TYPEDEF_STRUCT (pqueue_t,
 		(pthread_mutex_t, mutex),
 		(pthread_cond_t, cond),
 		(bool, cancel),
-		RARRAY (task_t, heap),
+		(char *, elem_type),
+		(size_t, elem_size),
+		(mr_compar_fn_t, compar_fn),
+		(void *, context),
+		RARRAY (mr_ptr_t, heap, "elem_type"),
 		)
 
-extern void pqueue_init (pqueue_t * pqueue);
+extern void pqueue_init (pqueue_t * pqueue, size_t elem_size, char * elem_type, mr_compar_fn_t compar_fn, void * context);
 extern void pqueue_cancel (pqueue_t * pqueue);
-extern status_t pqueue_push (pqueue_t * pqueue, task_t * task);
-extern status_t pqueue_pop (pqueue_t * pqueue, task_t * task);
+extern status_t pqueue_push (pqueue_t * pqueue, void * elem);
+extern status_t pqueue_pop (pqueue_t * pqueue, void * elem);
 
 #endif /* _PQUEUE_H_ */

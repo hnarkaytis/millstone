@@ -16,6 +16,7 @@
 /millstone.h
 /millstone.o
 /msg.o
+/pqueue.o
 /server.h
 /server.o
 /stub.c

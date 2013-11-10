@@ -598,7 +598,7 @@ handle_client (void * arg)
   file_t file;
   memset (&file, 0, sizeof (file));
   file.config = accepter_ctx.server_ctx->config;
-  file_chunks_init (&file, PROT_WRITE, MAP_SHARED, MAX_BLOCK_SIZE);
+  file_chunks_init (&file, PROT_WRITE, MAP_SHARED);
 
   connection_t connection;
   memset (&connection, 0, sizeof (connection));

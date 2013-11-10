@@ -14,6 +14,11 @@
 #include <fcntl.h> /* off64_t */
 #include <inttypes.h> /* uint8_t */
 #include <stdbool.h> /* bool */
+#include <sys/user.h> /* PAGE_SIZE */
+
+#define SPLIT_RATIO (1 << 6)
+#define MIN_BLOCK_SIZE (PAGE_SIZE)
+#define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO * SPLIT_RATIO)
 
 #define MAX_MAPPED_MEMORY (1 << 28) /* 256Mb */
 
@@ -44,11 +49,10 @@ TYPEDEF_STRUCT (file_t,
 extern chunk_t * chunk_ref (file_t * file, off64_t offset);
 extern status_t chunk_unref (file_t * file, off64_t offset);
 extern void * file_chunks_get_addr (file_t * file, off64_t offset);
-extern void file_chunks_init (file_t * file, int protect, int flags, size_t size);
+extern void file_chunks_init (file_t * file, int protect, int flags);
 extern void file_chunks_cancel (file_t * file);
 extern void file_chunks_free (file_t * file);
 extern void file_chunks_finilize (file_t * file);
 extern void file_chunks_set_release_handler (file_t * file, chunk_release_t chunk_release, void * context);
-extern void file_set_chunks_size (file_t * file, size_t chunk_size);
 
 #endif /* _FILE_H_ */

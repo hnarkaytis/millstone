@@ -25,12 +25,14 @@
 #include <sys/socket.h> /* socklen_t, socket, setsockopt, getsockname, connect, shutdown */
 #include <sys/uio.h> /* struct iovec */
 #include <sys/sendfile.h> /* sendfile64 */
+#include <sys/user.h> /* PAGE_SIZE */
 
 #include <openssl/sha.h> /* SHA1 */
 #include <pthread.h>
 
-#undef MIN_BLOCK_SIZE
 #define MIN_BLOCK_SIZE (PAGE_SIZE << 3)
+#define SPLIT_RATIO (1 << 10)
+#define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO)
 
 TYPEDEF_STRUCT (task_t,
 		(size_t, size),

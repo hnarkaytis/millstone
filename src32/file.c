@@ -162,7 +162,7 @@ TYPEDEF_STRUCT (chunk_ptr_t, ATTRIBUTES (__attribute__ ((packed))),
 		)
 
 void
-file_chunks_init (file_t * file, int protect, int flags, size_t size)
+file_chunks_init (file_t * file, int protect, int flags)
 {
   int i;
 
@@ -170,7 +170,7 @@ file_chunks_init (file_t * file, int protect, int flags, size_t size)
   LLIST_INIT (&file->chunks_pool, chunk_ptr_t, sizeof (file->chunks) / sizeof (file->chunks[0]));
   memset (&file->chunks, 0, sizeof (file->chunks));
 
-  file->chunk_size = size - size % PAGE_SIZE;
+  file->chunk_size = MAX_BLOCK_SIZE;
   file->chunk_release = NULL;
   file->context = NULL;
   file->cancel = FALSE;
@@ -226,10 +226,4 @@ file_chunks_set_release_handler (file_t * file, chunk_release_t chunk_release, v
 {
   file->chunk_release = chunk_release;
   file->context = context;
-}
-
-void
-file_set_chunks_size (file_t * file, size_t chunk_size)
-{
-  file->chunk_size = chunk_size;
 }

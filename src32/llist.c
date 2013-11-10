@@ -45,6 +45,7 @@ llist_push (llist_t * llist, void * elem)
     }
 
   llist_slot->ext.ptr = llist_slot->elem;
+  memcpy (llist_slot->elem, elem, llist->elem_size);
       
   pthread_mutex_lock (&llist->mutex);
   while ((llist->count == llist->max_count) && (!llist->cancel))
@@ -52,7 +53,6 @@ llist_push (llist_t * llist, void * elem)
       
   if (!llist->cancel)
     {
-      memcpy (llist_slot->elem, elem, llist->elem_size);
       if ((NULL != llist->elem_type) &&
 	  (MR_SUCCESS != MR_COPY_RECURSIVELY (llist->elem_type, elem, llist_slot->elem)))
 	status = ST_FAILURE;

@@ -639,7 +639,7 @@ run_client (config_t * config)
   
   file.size = lseek64 (file.fd, 0, SEEK_END);
 
-  file_chunks_init (&file, PROT_READ, MAP_PRIVATE, MAX_BLOCK_SIZE);
+  file_chunks_init (&file, PROT_READ, MAP_PRIVATE);
   
   status = create_client_socket (&file);
 

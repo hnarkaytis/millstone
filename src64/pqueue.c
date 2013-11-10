@@ -69,7 +69,6 @@ pqueue_push (pqueue_t * pqueue, void * elem)
 	  else
 	    {
 	      status = ST_SUCCESS;
-	      add->ptr = slot;
 	  
 	      int idx = pqueue->heap.size / sizeof (pqueue->heap.data[0]) - 1;
 	      if (0 == idx)
@@ -78,11 +77,12 @@ pqueue_push (pqueue_t * pqueue, void * elem)
 	      while (idx > 0)
 		{
 		  int parent = (idx - 1) >> 1;
-		  if (pqueue->compar_fn (pqueue->heap.data[parent], pqueue->heap.data[idx], pqueue->context) <= 0)
+		  if (pqueue->compar_fn (pqueue->heap.data[parent], slot, pqueue->context) <= 0)
 		    break;
 		  pqueue->heap.data[idx] = pqueue->heap.data[parent];
 		  idx = parent;
 		}
+	      pqueue->heap.data[idx].ptr = slot;
 	    }
 	}
     }
@@ -106,9 +106,9 @@ pqueue_pop (pqueue_t * pqueue, void * elem)
     {
       status = ST_SUCCESS;
       memcpy (elem, pqueue->heap.data[0].ptr, pqueue->elem_size);
+      MR_FREE (pqueue->heap.data[0].ptr);
       pqueue->heap.size -= sizeof (pqueue->heap.data[0]);
       int heap_size = pqueue->heap.size / sizeof (pqueue->heap.data[0]);
-      pqueue->heap.data[0] = pqueue->heap.data[heap_size];
       int idx = 0;
       for (;;)
 	{
@@ -118,9 +118,12 @@ pqueue_pop (pqueue_t * pqueue, void * elem)
 	  if ((child + 1 < heap_size) &&
 	      (pqueue->compar_fn (pqueue->heap.data[child + 1], pqueue->heap.data[child], pqueue->context) <= 0))
 	    ++child;
-	  if (pqueue->compar_fn (pqueue->heap.data[idx], pqueue->heap.data[child], pqueue->context) <= 0)
+	  if (pqueue->compar_fn (pqueue->heap.data[heap_size], pqueue->heap.data[child], pqueue->context) <= 0)
 	    break;
+	  pqueue->heap.data[idx] = pqueue->heap.data[child];
+	  idx = child;
 	}
+      pqueue->heap.data[idx] = pqueue->heap.data[heap_size];
     }
   pthread_mutex_unlock (&pqueue->mutex);
   return (status);

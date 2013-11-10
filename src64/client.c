@@ -36,6 +36,7 @@
 #define MIN_BLOCK_SIZE (PAGE_SIZE << 3)
 #define SPLIT_RATIO (1 << 10)
 #define MAX_BLOCK_SIZE (MIN_BLOCK_SIZE * SPLIT_RATIO)
+#define CHUNKS_SIZE (1 << 28)
 
 TYPEDEF_STRUCT (task_t,
 		(size_t, size),
@@ -49,7 +50,7 @@ TYPEDEF_STRUCT (client_t,
 		(llist_t, blocks),
 		)
 
-static int
+int
 task_compar (const mr_ptr_t x, const mr_ptr_t y, const void * context)
 {
   const task_t * task_x = x.ptr;
@@ -178,17 +179,31 @@ msg_block_matched (client_t * client, block_matched_t * block_matched)
 static status_t
 start_file_sync (client_t * client, file_id_t * file_id)
 {
-  task_t task;
+  status_t status = ST_SUCCESS;
   fd_t * fd = file_pool_get_fd (&client->file_pool, file_id);
   if (NULL == fd)
     return (ST_FAILURE);
 
+  task_t task;
   memset (&task, 0, sizeof (task));
-  task.block_id.offset = 0;
-  task.block_id.size = fd->file.size;
+  task.block_id.size = CHUNKS_SIZE;
   task.block_id.file_id = fd->file.file_id;
   task.size = MAX_BLOCK_SIZE;
-  return (pqueue_push (&client->tasks, &task));
+      
+  for (task.block_id.offset = 0; task.block_id.offset < fd->file.size; task.block_id.offset += task.block_id.size)
+    {
+      if (task.block_id.size > fd->file.size - task.block_id.offset)
+	task.block_id.size = fd->file.size - task.block_id.offset;
+
+      file_pool_ref_fd (&client->file_pool, fd, 1);
+      status = pqueue_push (&client->tasks, &task);
+      if (ST_SUCCESS != status)
+	break;
+    }
+
+  if (ST_SUCCESS == status)
+    file_pool_ref_fd (&client->file_pool, fd, -1);
+  return (status);
 }
 
 static status_t
@@ -282,7 +297,7 @@ client_worker (void * arg)
       status_t status = pqueue_pop (&client->tasks, &task);
       if (ST_SUCCESS != status)
 	break;
-      
+
       TRACE_MSG ("Server worker got task: offset:size 0x%" SCNx64 ":%" SCNx32 " split on 0x%zx.",
 		 task.block_id.offset, task.block_id.size, task.size);
       
@@ -394,7 +409,7 @@ data_connection_main_loop (client_t * client, int data_fd)
       status = send_block (client, data_fd, block_id);
       if (ST_SUCCESS != status)
 	{
-	  INFO_MSG ("Lost data connection. Push task 0x%" SCNx64 ":0x%" SCNx32 "to queue.", block_id.offset, block_id.size);
+	  WARN_MSG ("Lost data connection. Push task 0x%" SCNx64 ":0x%" SCNx32 " to queue.", block_id.offset, block_id.size);
 	  
 	  llist_push (&client->blocks, &block_id);
 	  return;

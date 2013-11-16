@@ -25,10 +25,6 @@ TYPEDEF_STRUCT (connection_t,
 #define EXPECTED_PACKET_SIZE (1500 - 72) /* IPv6, TCP timestamps - 72 bytes */
 #define CONNECTION_QUEUE_SIZE (EXPECTED_PACKET_SIZE / sizeof (msg_t))
 
-#ifndef SD_BOTH
-#define SD_BOTH (2)
-#endif /* SD_BOTH */
-
 extern void connection_init (connection_t * connection, config_t * config);
 extern status_t connection_cmd_writer (connection_t * connection);
 extern void connection_cancel (connection_t * connection);

@@ -434,7 +434,7 @@ start_data_connection (void * arg)
   else
     {
       data_connection_main_loop (client, data_fd);
-      shutdown (data_fd, SD_BOTH);
+      shutdown (data_fd, SHUT_RDWR);
     }
   close (data_fd);
   return (NULL);
@@ -517,7 +517,7 @@ connect_to_server (connection_t * connection)
   
   status_t status = start_client (connection);
 
-  shutdown (connection->cmd_fd, SD_BOTH);
+  shutdown (connection->cmd_fd, SHUT_RDWR);
 
   TRACE_MSG ("Shutdown command socket.");
 

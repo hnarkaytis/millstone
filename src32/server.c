@@ -483,7 +483,7 @@ start_file_sync (void * arg)
     status = chunk_file (server, send_block_request);
   else
     status = start_threads (server_worker, server->connection->file->config->workers_number, task_producer, server);
-  shutdown (server->connection->cmd_fd, SD_BOTH); /* force shutdown of reader and writer */
+  shutdown (server->connection->cmd_fd, SHUT_RDWR); /* force shutdown of reader and writer */
   return (status);
 }
 
@@ -667,7 +667,7 @@ handle_client (void * arg)
       close (file.fd);
     }
   
-  shutdown (accepter_ctx.fd, SD_BOTH);
+  shutdown (accepter_ctx.fd, SHUT_RDWR);
   close (accepter_ctx.fd);
 
   /* free allocated slots */
@@ -755,7 +755,7 @@ run_accepter (server_ctx_t * server_ctx)
       if (rv != 0)
 	{
 	  ERROR_MSG ("Failed to create thread for new client.");
-	  shutdown (accepter_ctx.fd, SD_BOTH);
+	  shutdown (accepter_ctx.fd, SHUT_RDWR);
 	  close (accepter_ctx.fd);
 	  continue;
 	}
@@ -784,7 +784,7 @@ create_server_socket (server_ctx_t * server_ctx)
 
   status = run_accepter (server_ctx);
   
-  shutdown (server_ctx->server_sock, SD_BOTH);
+  shutdown (server_ctx->server_sock, SHUT_RDWR);
   close (server_ctx->server_sock);
   
   DEBUG_MSG ("Server socket closed.");
@@ -797,7 +797,7 @@ data_reader_wd (void * arg)
 {
   server_ctx_t * server_ctx = arg;
   status_t status = create_server_socket (server_ctx);
-  shutdown (server_ctx->data_sock, SD_BOTH);
+  shutdown (server_ctx->data_sock, SHUT_RDWR);
   return (status);
 }
 
@@ -980,7 +980,7 @@ static mr_status_t
 shutdown_server (const mr_ptr_t node, const void * context)
 {
   server_t * server = node.ptr;
-  shutdown (server->connection->cmd_fd, SD_BOTH);
+  shutdown (server->connection->cmd_fd, SHUT_RDWR);
   return (MR_SUCCESS);
 }
 

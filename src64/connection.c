@@ -62,7 +62,7 @@ void
 connection_cancel (connection_t * connection)
 {
   llist_cancel (&connection->cmd_out);
-  shutdown (connection->cmd_fd, SD_BOTH);
+  shutdown (connection->cmd_fd, SHUT_RDWR);
   
   pthread_mutex_lock (&connection->mutex);
   connection->ref_count = 0;

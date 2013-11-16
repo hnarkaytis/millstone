@@ -414,7 +414,7 @@ handle_client (void * arg)
       MR_FREE_RECURSIVELY (msg_t, &msg);
     }
   
-  shutdown (accepter_ctx.fd, SD_BOTH);
+  shutdown (accepter_ctx.fd, SHUT_RDWR);
   close (accepter_ctx.fd);
   
   TRACE_MSG ("Closed connection to client: %08x:%04x.", accepter_ctx.remote.sin_addr.s_addr, accepter_ctx.remote.sin_port);
@@ -498,7 +498,7 @@ run_accepter (server_ctx_t * server_ctx)
       if (rv != 0)
 	{
 	  ERROR_MSG ("Failed to create thread for new client.");
-	  shutdown (accepter_ctx.fd, SD_BOTH);
+	  shutdown (accepter_ctx.fd, SHUT_RDWR);
 	  close (accepter_ctx.fd);
 	  continue;
 	}
@@ -527,7 +527,7 @@ create_server_socket (server_ctx_t * server_ctx)
 
   status = run_accepter (server_ctx);
   
-  shutdown (server_ctx->server_sock, SD_BOTH);
+  shutdown (server_ctx->server_sock, SHUT_RDWR);
   close (server_ctx->server_sock);
   
   TRACE_MSG ("Server %d socket closed.", server_ctx->server_sock);
@@ -539,7 +539,7 @@ static mr_status_t
 shutdown_server (const mr_ptr_t node, const void * context)
 {
   server_t * server = node.ptr;
-  shutdown (server->connection->cmd_fd, SD_BOTH);
+  shutdown (server->connection->cmd_fd, SHUT_RDWR);
   return (MR_SUCCESS);
 }
 

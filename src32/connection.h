@@ -17,8 +17,4 @@ TYPEDEF_STRUCT (connection_t,
 
 #define EXPECTED_PACKET_SIZE (1500 - 72) /* IPv6, TCP timestamps - 72 bytes */
 
-#ifndef SD_BOTH
-#define SD_BOTH (2)
-#endif /* SD_BOTH */
-
 #endif /* _CONNECTION_H_ */

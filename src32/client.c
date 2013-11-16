@@ -198,7 +198,7 @@ client_cmd_writer (void * arg)
       DEBUG_MSG ("Message sent.");
     }
   
-  shutdown (client->connection->cmd_fd, SD_BOTH);
+  shutdown (client->connection->cmd_fd, SHUT_RDWR);
   llist_cancel (&client->data_in);
   llist_cancel (&client->cmd_in);
   llist_cancel (&client->cmd_out);
@@ -529,7 +529,7 @@ configure_data_connection (connection_t * connection)
   DEBUG_MSG ("Connected data socket. Local port is %04x.", connection->local.sin_port);
   
   status_t status = run_session (connection);
-  shutdown (connection->data_fd, SD_BOTH);
+  shutdown (connection->data_fd, SHUT_RDWR);
   
   DEBUG_MSG ("Shutdown data socket.");
 
@@ -587,7 +587,7 @@ connect_to_server (connection_t * connection)
   
   status_t status = create_data_socket (connection);
 
-  shutdown (connection->cmd_fd, SD_BOTH);
+  shutdown (connection->cmd_fd, SHUT_RDWR);
 
   DEBUG_MSG ("Shutdown command socket.");
 

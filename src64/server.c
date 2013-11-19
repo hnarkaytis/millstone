@@ -270,11 +270,7 @@ start_new_server (accepter_ctx_t * accepter_ctx)
   int rv = setsockopt (connection.cmd_fd, SOL_TCP, TCP_NODELAY, &tcp_nodelay, sizeof (tcp_nodelay));
   if (rv != 0)
     WARN_MSG ("Failed to turn off Nigel algorithm with errno %d - %s.", errno, strerror (errno));
-  size_t buf_size = EXPECTED_PACKET_SIZE;
-  rv = setsockopt (connection.cmd_fd, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof (buf_size));
-  if (rv != 0)
-    WARN_MSG ("Failed to set size of outgoing buffer with errno %d - %s.", errno, strerror (errno));
-  
+
   server_t server;
   memset (&server, 0, sizeof (server));
   server.connection = &connection;

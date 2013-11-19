@@ -495,21 +495,22 @@ connect_to_server (connection_t * connection)
 {
   TRACE_MSG ("Connect to %08x:%04x.", connection->remote.sin_addr.s_addr, connection->remote.sin_port);
 
-  int rv = TEMP_FAILURE_RETRY (connect (connection->cmd_fd, (struct sockaddr *)&connection->remote, sizeof (connection->remote)));
-  if (rv < 0)
-    {
-      ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
-      return (ST_FAILURE);
-    }
-
   int tcp_nodelay = !0;
-  rv = setsockopt (connection->cmd_fd, SOL_TCP, TCP_NODELAY, &tcp_nodelay, sizeof (tcp_nodelay));
+  int rv = setsockopt (connection->cmd_fd, SOL_TCP, TCP_NODELAY, &tcp_nodelay, sizeof (tcp_nodelay));
   if (rv != 0)
     WARN_MSG ("Failed to turn off Nigel algorithm with errno %d - %s.", errno, strerror (errno));
   size_t buf_size = EXPECTED_PACKET_SIZE;
   rv = setsockopt (connection->cmd_fd, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof (buf_size));
   if (rv != 0)
     WARN_MSG ("Failed to set size of outgoing buffer with errno %d - %s.", errno, strerror (errno));
+
+  rv = TEMP_FAILURE_RETRY (connect (connection->cmd_fd, (struct sockaddr *)&connection->remote, sizeof (connection->remote)));
+  if (rv < 0)
+    {
+      ERROR_MSG ("Connect failed errno(%d) '%s'.", errno, strerror (errno));
+      return (ST_FAILURE);
+    }
+
   socklen_t socklen = sizeof (connection->local); 
   getsockname (connection->cmd_fd, (struct sockaddr *)&connection->local, &socklen); 
 

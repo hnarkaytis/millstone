@@ -22,7 +22,7 @@ TYPEDEF_STRUCT (connection_t,
 
 #define DEFAULT_LISTEN_PORT (31415)
 
-#define EXPECTED_PACKET_SIZE (1500 - 72) /* IPv6, TCP timestamps - 72 bytes */
+#define EXPECTED_PACKET_SIZE (9000 - 72) /* Jumbo frames with IPv6, TCP timestamps - 72 bytes */
 #define CONNECTION_QUEUE_SIZE (EXPECTED_PACKET_SIZE / sizeof (msg_t))
 
 extern void connection_init (connection_t * connection, config_t * config);

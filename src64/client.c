@@ -373,6 +373,8 @@ send_block (client_t * client, int data_fd, block_id_t block_id)
   if (ST_SUCCESS != buf_send (data_fd, iov, sizeof (iov) / sizeof (iov[0])))
     return (ST_FAILURE);
   
+  stat_bytes_sent (block_id.size);
+  
   while (block_id.size > 0)
     {
       ssize_t rv = TEMP_FAILURE_RETRY (sendfile64 (data_fd, fd->fd, &block_id.offset, block_id.size));

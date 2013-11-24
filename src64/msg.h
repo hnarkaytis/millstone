@@ -46,4 +46,7 @@ extern status_t msg_send (int fd, msg_t * msg);
 extern status_t buf_recv (int fd, void * buf, size_t size);
 extern status_t buf_send (int fd, struct iovec * iov, size_t count);
 
+extern uint64_t stat_bytes_sent (uint64_t bytes);
+extern uint64_t stat_bytes_recv (uint64_t bytes);
+
 #endif /* _MSG_H_ */

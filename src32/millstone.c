@@ -243,7 +243,8 @@ int main (int argc, char * argv[])
       status = ST_FAILURE;
       break;
     }
-  
+
+  printf ("Sent %" SCNd64 " recv %" SCNd64 "\n", stat_bytes_sent (0), stat_bytes_recv (0));
   TRACE_MSG ("Stop Millstone.");
 
   return ((ST_SUCCESS != status) ? EXIT_FAILURE : EXIT_SUCCESS);

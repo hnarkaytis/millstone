@@ -6,9 +6,12 @@
 
 #include <stddef.h> /* size_t, ssize_t */
 #include <string.h> /* memset */
+#include <inttypes.h> /* uint64_t */
 #include <unistd.h> /* TEMP_FAILURE_RETRY, read */
 #include <errno.h> /* errno for TEMP_FAILURE_RETRY */
 #include <sys/uio.h> /* writev, struct iovec */
+
+#include <pthread.h>
 
 #include <metaresc.h>
 
@@ -20,6 +23,29 @@
 #define SERIALIZE MR_SAVE_XDR_RA
 #define DESERIALIZE MR_LOAD_XDR_RA
 #endif
+
+static volatile uint64_t bytes_sent = 0;
+static volatile uint64_t bytes_recv = 0;
+static pthread_mutex_t bytes_sent_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t bytes_recv_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+uint64_t
+stat_bytes_sent (uint64_t bytes)
+{
+  pthread_mutex_lock (&bytes_sent_mutex);
+  bytes_sent += bytes;
+  pthread_mutex_unlock (&bytes_sent_mutex);
+  return (bytes_sent);
+}
+
+uint64_t
+stat_bytes_recv (uint64_t bytes)
+{
+  pthread_mutex_lock (&bytes_recv_mutex);
+  bytes_recv += bytes;
+  pthread_mutex_unlock (&bytes_recv_mutex);
+  return (bytes_recv);
+}
 
 status_t
 buf_recv (int fd, void * buf, size_t size)
@@ -33,6 +59,7 @@ buf_recv (int fd, void * buf, size_t size)
       if (rv <= 0)
 	return (ST_FAILURE);
     }
+  stat_bytes_recv (size);
   return (ST_SUCCESS);
 }
 
@@ -64,6 +91,9 @@ buf_send (int fd, struct iovec * iov, size_t count)
       ssize_t rv = TEMP_FAILURE_RETRY (writev (fd, iov, count));
       if (rv <= 0)
 	return (ST_FAILURE);
+
+      stat_bytes_sent (rv);
+
       while (rv >= iov->iov_len)
 	{
 	  rv -= iov->iov_len;

@@ -1,5 +1,18 @@
 #define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
 
+#include <stddef.h> /* size_t, ssize_t */
+#include <signal.h> /* signal, SIG_IGN, SIGPIPE */
+#include <unistd.h> /* TEMP_FAILURE_RETRY, close */
+#include <inttypes.h> /* SCNx64 */
+#include <string.h> /* memset, strerror */
+#include <errno.h> /* errno */
+#include <netinet/in.h> /* htonl, struct sockaddr_in, INADDR_ANY */
+#include <sys/socket.h> /* socklen_t, socket, setsockopt, getsockname, bind, accept, listen, shutdown */
+#include <netinet/tcp.h> /* TCP_NODELAY */
+
+#include <openssl/sha.h> /* SHA1 */
+#include <pthread.h>
+
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif /* HAVE_CONFIG_H */
@@ -15,20 +28,7 @@
 #include <client.h> /* client_id_t */
 #include <server.h>
 
-#include <stddef.h> /* size_t, ssize_t */
-#include <signal.h> /* signal, SIG_IGN, SIGPIPE */
-#include <unistd.h> /* TEMP_FAILURE_RETRY, close */
-#include <inttypes.h> /* SCNx64 */
-#include <string.h> /* memset, strerror */
-#include <errno.h> /* errno */
-#include <netinet/in.h> /* htonl, struct sockaddr_in, INADDR_ANY */
-#include <sys/socket.h> /* socklen_t, socket, setsockopt, getsockname, bind, accept, listen, shutdown */
-#include <netinet/tcp.h> /* TCP_NODELAY */
-
-#include <openssl/sha.h> /* SHA1 */
-#include <pthread.h>
-
-#include <metaresc.h>
+#include <metaresc.h> /* TYPEDEF_STRUCT */
 
 TYPEDEF_STRUCT (server_ctx_t,
 		(config_t *, config),

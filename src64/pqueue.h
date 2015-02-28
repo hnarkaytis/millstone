@@ -18,7 +18,9 @@ TYPEDEF_STRUCT (pqueue_t,
 		(size_t, elem_size),
 		(mr_compar_fn_t, compar_fn),
 		(void *, context),
-		RARRAY (mr_ptr_t, heap, "elem_type"),
+		(mr_ptr_t *, heap, , "elem_type", { .offset = offsetof (pqueue_t, heap_size) }, "offset"),
+		(ssize_t, heap_size),
+		VOID (ssize_t, heap_alloc_size),
 		)
 
 extern void pqueue_init (pqueue_t * pqueue, size_t elem_size, char * elem_type, mr_compar_fn_t compar_fn, void * context);

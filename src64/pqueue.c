@@ -33,17 +33,17 @@ pqueue_cancel (pqueue_t * pqueue)
   
   pthread_mutex_lock (&pqueue->mutex);
   pqueue->cancel = TRUE;
-  for (i = pqueue->heap.size / sizeof (pqueue->heap.data[0]) - 1; i >= 0; --i)
+  for (i = pqueue->heap_size / sizeof (pqueue->heap[0]) - 1; i >= 0; --i)
     {
       if (pqueue->elem_type)
-	MR_FREE_RECURSIVELY (pqueue->elem_type, pqueue->heap.data[i].ptr);
-      MR_FREE (pqueue->heap.data[i].ptr);
+	MR_FREE_RECURSIVELY (pqueue->elem_type, pqueue->heap[i].ptr);
+      MR_FREE (pqueue->heap[i].ptr);
     }
-  if (pqueue->heap.data)
-    MR_FREE (pqueue->heap.data);
-  pqueue->heap.data = NULL;
-  pqueue->heap.size = 0;
-  pqueue->heap.alloc_size = 0;
+  if (pqueue->heap)
+    MR_FREE (pqueue->heap);
+  pqueue->heap = NULL;
+  pqueue->heap_size = 0;
+  pqueue->heap_alloc_size = 0;
   pthread_cond_broadcast (&pqueue->cond);
   pthread_mutex_unlock (&pqueue->mutex);
 }
@@ -60,29 +60,29 @@ pqueue_push (pqueue_t * pqueue, void * elem)
   pthread_mutex_lock (&pqueue->mutex);
   if (!pqueue->cancel)
     {
-      mr_ptr_t * add = mr_rarray_append ((void*)&pqueue->heap, sizeof (pqueue->heap.data[0]));
+      mr_ptr_t * add = mr_rarray_allocate_element ((void**)&pqueue->heap, &pqueue->heap_size, &pqueue->heap_alloc_size, sizeof (pqueue->heap[0]));
       if (NULL != add)
 	{
 	  if ((NULL != pqueue->elem_type) &&
 	      (MR_SUCCESS != MR_COPY_RECURSIVELY (pqueue->elem_type, elem, slot)))
-	    pqueue->heap.size -= sizeof (pqueue->heap.data[0]);
+	    pqueue->heap_size -= sizeof (pqueue->heap[0]);
 	  else
 	    {
 	      status = ST_SUCCESS;
 	  
-	      int idx = pqueue->heap.size / sizeof (pqueue->heap.data[0]) - 1;
+	      int idx = pqueue->heap_size / sizeof (pqueue->heap[0]) - 1;
 	      if (0 == idx)
 		pthread_cond_broadcast (&pqueue->cond);
 	      
 	      while (idx > 0)
 		{
 		  int parent = (idx - 1) >> 1;
-		  if (pqueue->compar_fn (pqueue->heap.data[parent], slot, pqueue->context) <= 0)
+		  if (pqueue->compar_fn (pqueue->heap[parent], slot, pqueue->context) <= 0)
 		    break;
-		  pqueue->heap.data[idx] = pqueue->heap.data[parent];
+		  pqueue->heap[idx] = pqueue->heap[parent];
 		  idx = parent;
 		}
-	      pqueue->heap.data[idx].ptr = slot;
+	      pqueue->heap[idx].ptr = slot;
 	    }
 	}
     }
@@ -99,16 +99,16 @@ pqueue_pop (pqueue_t * pqueue, void * elem)
 {
   status_t status = ST_FAILURE;
   pthread_mutex_lock (&pqueue->mutex);
-  while ((0 == pqueue->heap.size) && (!pqueue->cancel))
+  while ((0 == pqueue->heap_size) && (!pqueue->cancel))
     pthread_cond_wait (&pqueue->cond, &pqueue->mutex);
   
   if (!pqueue->cancel)
     {
       status = ST_SUCCESS;
-      memcpy (elem, pqueue->heap.data[0].ptr, pqueue->elem_size);
-      MR_FREE (pqueue->heap.data[0].ptr);
-      pqueue->heap.size -= sizeof (pqueue->heap.data[0]);
-      int heap_size = pqueue->heap.size / sizeof (pqueue->heap.data[0]);
+      memcpy (elem, pqueue->heap[0].ptr, pqueue->elem_size);
+      MR_FREE (pqueue->heap[0].ptr);
+      pqueue->heap_size -= sizeof (pqueue->heap[0]);
+      int heap_size = pqueue->heap_size / sizeof (pqueue->heap[0]);
       int idx = 0;
       for (;;)
 	{
@@ -116,14 +116,14 @@ pqueue_pop (pqueue_t * pqueue, void * elem)
 	  if (child >= heap_size)
 	    break;
 	  if ((child + 1 < heap_size) &&
-	      (pqueue->compar_fn (pqueue->heap.data[child + 1], pqueue->heap.data[child], pqueue->context) <= 0))
+	      (pqueue->compar_fn (pqueue->heap[child + 1], pqueue->heap[child], pqueue->context) <= 0))
 	    ++child;
-	  if (pqueue->compar_fn (pqueue->heap.data[heap_size], pqueue->heap.data[child], pqueue->context) <= 0)
+	  if (pqueue->compar_fn (pqueue->heap[heap_size], pqueue->heap[child], pqueue->context) <= 0)
 	    break;
-	  pqueue->heap.data[idx] = pqueue->heap.data[child];
+	  pqueue->heap[idx] = pqueue->heap[child];
 	  idx = child;
 	}
-      pqueue->heap.data[idx] = pqueue->heap.data[heap_size];
+      pqueue->heap[idx] = pqueue->heap[heap_size];
     }
   pthread_mutex_unlock (&pqueue->mutex);
   return (status);

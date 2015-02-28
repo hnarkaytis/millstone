@@ -1,18 +1,5 @@
 #define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif /* HAVE_CONFIG_H */
-#include <millstone.h> /* config_t, status_t */
-#include <logging.h> /* *_MSG */
-#include <file.h> /* file_id_t */
-#include <block.h> /* block_id_t */
-#include <connection.h> /* connection_t */
-#include <file_pool.h> /* file_pool_t */
-#include <msg.h> /* msg_t */
-#include <pqueue.h> /* pqueue_t, task_t */
-#include <client.h>
-
 #include <stddef.h> /* size_t, ssize_t */
 #include <unistd.h> /* TEMP_FAILURE_RETRY, close */
 #include <stdbool.h> /* bool */
@@ -31,7 +18,20 @@
 #include <openssl/sha.h> /* SHA1 */
 #include <pthread.h>
 
-#include <metaresc.h>
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif /* HAVE_CONFIG_H */
+#include <millstone.h> /* config_t, status_t */
+#include <logging.h> /* *_MSG */
+#include <file.h> /* file_id_t */
+#include <block.h> /* block_id_t */
+#include <connection.h> /* connection_t */
+#include <file_pool.h> /* file_pool_t */
+#include <msg.h> /* msg_t */
+#include <pqueue.h> /* pqueue_t, task_t */
+#include <client.h>
+
+#include <metaresc.h> /* TYPEDEF_STRUCT */
 
 #define MIN_BLOCK_SIZE (PAGE_SIZE << 3)
 #define SPLIT_RATIO (1 << 10)
@@ -206,6 +206,16 @@ start_file_sync (client_t * client, file_id_t * file_id)
   return (status);
 }
 
+static char
+sequentialy_touch_pages (uint8_t * data, off64_t size)
+{
+  off64_t offset;
+  char unused = 0;
+  for (offset = 0; offset < size; offset += PAGE_SIZE)
+    unused += data[offset];
+  return (unused);
+}
+
 static status_t
 file_transfer (client_t * client, file_id_t * file_id)
 {
@@ -227,6 +237,7 @@ file_transfer (client_t * client, file_id_t * file_id)
       if (block_id.size > fd->file.size - block_id.offset)
 	block_id.size = fd->file.size - block_id.offset;
       file_pool_ref_fd (&client->file_pool, fd, 1);
+      sequentialy_touch_pages (&fd->data[block_id.offset], block_id.size);
       status = llist_push (&client->blocks, &block_id);
       if (ST_SUCCESS != status)
 	break;

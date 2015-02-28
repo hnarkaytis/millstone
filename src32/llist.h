@@ -15,7 +15,7 @@ TYPEDEF_STRUCT (llist_slot_t,
 		(llist_slot_t *, prev),
 		(llist_slot_t *, next),
 		(mr_ptr_t, ext, , "elem_type"),
-		NONE (char, elem, []),
+		VOID (char, elem, []),
 		)
 
 TYPEDEF_STRUCT (llist_t,

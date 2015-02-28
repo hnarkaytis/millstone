@@ -1,9 +1,5 @@
 #define _GNU_SOURCE /* TEMP_FAILURE_RETRY */
 
-#include <millstone.h> /* status_t */
-#include <logging.h>
-#include <msg.h> /* msg_t */
-
 #include <stddef.h> /* size_t, ssize_t */
 #include <string.h> /* memset */
 #include <inttypes.h> /* uint64_t */
@@ -14,6 +10,9 @@
 #include <pthread.h>
 
 #include <metaresc.h>
+#include <millstone.h> /* status_t */
+#include <logging.h>
+#include <msg.h> /* msg_t */
 
 //#define DEBUG_PROTOCOL
 #ifdef DEBUG_PROTOCOL
@@ -69,16 +68,16 @@ msg_recv (int fd, msg_t * msg)
   mr_rarray_t rarray;
   memset (&rarray, 0, sizeof (rarray));
   
-  status_t status = buf_recv (fd, &rarray.size, sizeof (rarray.size));
+  status_t status = buf_recv (fd, &rarray.MR_SIZE, sizeof (rarray.MR_SIZE));
   if (ST_SUCCESS != status)
     return (ST_FAILURE);
   
-  char data[rarray.size];
-  status = buf_recv (fd, data, rarray.size);
+  char data[rarray.MR_SIZE];
+  status = buf_recv (fd, data, rarray.MR_SIZE);
   if (ST_SUCCESS != status)
     return (ST_FAILURE);
   
-  rarray.data = data;
+  rarray.data.ptr = data;
   mr_status_t mr_status = DESERIALIZE (msg_t, &rarray, msg);
   return ((MR_SUCCESS == mr_status) ? ST_SUCCESS : ST_FAILURE);
 }
@@ -113,17 +112,17 @@ status_t
 msg_send (int fd, msg_t * msg)
 {
   mr_rarray_t rarray = SERIALIZE (msg_t, msg);
-  if (NULL == rarray.data)
+  if (NULL == rarray.data.ptr)
     return (ST_FAILURE);
 
   struct iovec iov[] = {
-    { .iov_len = sizeof (rarray.size), .iov_base = &rarray.size, },
-    { .iov_len = rarray.size, .iov_base = rarray.data, },
+    { .iov_len = sizeof (rarray.MR_SIZE), .iov_base = &rarray.MR_SIZE, },
+    { .iov_len = rarray.MR_SIZE, .iov_base = rarray.data.ptr, },
   };
 
   status_t status = buf_send (fd, iov, sizeof (iov) / sizeof (iov[0]));
 
-  MR_FREE (rarray.data);
+  MR_FREE (rarray.data.ptr);
 
   return (status);
 }
